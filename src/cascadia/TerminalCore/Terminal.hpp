@@ -6,7 +6,8 @@
 #include <conattrs.hpp>
 
 #include "../../buffer/out/textBuffer.hpp"
-#include "../../renderer/inc/IRenderData.hpp"
+#include "../../types/inc/sgrStack.hpp"
+#include "../../renderer/inc/BlinkingState.hpp"
 #include "../../terminal/parser/StateMachine.hpp"
 #include "../../terminal/input/terminalInput.hpp"
 
@@ -19,9 +20,10 @@
 // You have to forward decl the ICoreSettings here, instead of including the header.
 // If you include the header, there will be compilation errors with other
 //      headers that include Terminal.hpp
-namespace winrt::Microsoft::Terminal::Settings
+namespace winrt::Microsoft::Terminal::Core
 {
     struct ICoreSettings;
+    struct ICoreAppearance;
 }
 
 namespace Microsoft::Terminal::Core
@@ -58,13 +60,17 @@ public:
                 SHORT scrollbackLines,
                 Microsoft::Console::Render::IRenderTarget& renderTarget);
 
-    void CreateFromSettings(winrt::Microsoft::Terminal::Settings::ICoreSettings settings,
+    void CreateFromSettings(winrt::Microsoft::Terminal::Core::ICoreSettings settings,
                             Microsoft::Console::Render::IRenderTarget& renderTarget);
 
-    void UpdateSettings(winrt::Microsoft::Terminal::Settings::ICoreSettings settings);
+    void UpdateSettings(winrt::Microsoft::Terminal::Core::ICoreSettings settings);
+    void UpdateAppearance(const winrt::Microsoft::Terminal::Core::ICoreAppearance& appearance);
 
     // Write goes through the parser
     void Write(std::wstring_view stringView);
+
+    // WritePastedText goes directly to the connection
+    void WritePastedText(std::wstring_view stringView);
 
     [[nodiscard]] std::shared_lock<std::shared_mutex> LockForReading();
     [[nodiscard]] std::unique_lock<std::shared_mutex> LockForWriting();
@@ -78,15 +84,9 @@ public:
     // These methods are defined in TerminalApi.cpp
     bool PrintString(std::wstring_view stringView) noexcept override;
     bool ExecuteChar(wchar_t wch) noexcept override;
-    bool SetTextToDefaults(bool foreground, bool background) noexcept override;
-    bool SetTextForegroundIndex(BYTE colorIndex) noexcept override;
-    bool SetTextBackgroundIndex(BYTE colorIndex) noexcept override;
-    bool SetTextForegroundIndex256(BYTE colorIndex) noexcept override;
-    bool SetTextBackgroundIndex256(BYTE colorIndex) noexcept override;
-    bool SetTextRgbColor(COLORREF color, bool foreground) noexcept override;
-    bool BoldText(bool boldOn) noexcept override;
-    bool UnderlineText(bool underlineOn) noexcept override;
-    bool ReverseText(bool reversed) noexcept override;
+    TextAttribute GetTextAttributes() const noexcept override;
+    void SetTextAttributes(const TextAttribute& attrs) noexcept override;
+    Microsoft::Console::Types::Viewport GetBufferSize() noexcept override;
     bool SetCursorPosition(short x, short y) noexcept override;
     COORD GetCursorPosition() noexcept override;
     bool SetCursorVisibility(const bool visible) noexcept override;
@@ -97,29 +97,47 @@ public:
     bool EraseCharacters(const size_t numChars) noexcept override;
     bool EraseInLine(const ::Microsoft::Console::VirtualTerminal::DispatchTypes::EraseType eraseType) noexcept override;
     bool EraseInDisplay(const ::Microsoft::Console::VirtualTerminal::DispatchTypes::EraseType eraseType) noexcept override;
+    bool WarningBell() noexcept override;
     bool SetWindowTitle(std::wstring_view title) noexcept override;
     bool SetColorTableEntry(const size_t tableIndex, const COLORREF color) noexcept override;
     bool SetCursorStyle(const ::Microsoft::Console::VirtualTerminal::DispatchTypes::CursorStyle cursorStyle) noexcept override;
+    bool SetCursorColor(const COLORREF color) noexcept override;
     bool SetDefaultForeground(const COLORREF color) noexcept override;
     bool SetDefaultBackground(const COLORREF color) noexcept override;
 
     bool EnableWin32InputMode(const bool win32InputMode) noexcept override;
     bool SetCursorKeysMode(const bool applicationMode) noexcept override;
     bool SetKeypadMode(const bool applicationMode) noexcept override;
+    bool SetScreenMode(const bool reverseMode) noexcept override;
     bool EnableVT200MouseMode(const bool enabled) noexcept override;
     bool EnableUTF8ExtendedMouseMode(const bool enabled) noexcept override;
     bool EnableSGRExtendedMouseMode(const bool enabled) noexcept override;
     bool EnableButtonEventMouseMode(const bool enabled) noexcept override;
     bool EnableAnyEventMouseMode(const bool enabled) noexcept override;
     bool EnableAlternateScrollMode(const bool enabled) noexcept override;
+    bool EnableXtermBracketedPasteMode(const bool enabled) noexcept override;
+    bool IsXtermBracketedPasteModeEnabled() const noexcept override;
 
     bool IsVtInputEnabled() const noexcept override;
+
+    bool CopyToClipboard(std::wstring_view content) noexcept override;
+
+    bool AddHyperlink(std::wstring_view uri, std::wstring_view params) noexcept override;
+    bool EndHyperlink() noexcept override;
+
+    bool SetTaskbarProgress(const size_t state, const size_t progress) noexcept override;
+    bool SetWorkingDirectory(std::wstring_view uri) noexcept override;
+    std::wstring_view GetWorkingDirectory() noexcept override;
+
+    bool PushGraphicsRendition(const ::Microsoft::Console::VirtualTerminal::VTParameters options) noexcept override;
+    bool PopGraphicsRendition() noexcept override;
+
 #pragma endregion
 
 #pragma region ITerminalInput
     // These methods are defined in Terminal.cpp
     bool SendKeyEvent(const WORD vkey, const WORD scanCode, const Microsoft::Terminal::Core::ControlKeyStates states, const bool keyDown) override;
-    bool SendMouseEvent(const COORD viewportPos, const unsigned int uiButton, const ControlKeyStates states, const short wheelDelta) override;
+    bool SendMouseEvent(const COORD viewportPos, const unsigned int uiButton, const ControlKeyStates states, const short wheelDelta, const Microsoft::Console::VirtualTerminal::TerminalInput::MouseButtonState state) override;
     bool SendCharEvent(const wchar_t ch, const WORD scanCode, const ControlKeyStates states) override;
 
     [[nodiscard]] HRESULT UserResize(const COORD viewportSize) noexcept override;
@@ -128,6 +146,10 @@ public:
 
     void TrySnapOnInput() override;
     bool IsTrackingMouseInput() const noexcept;
+
+    std::wstring GetHyperlinkAtPosition(const COORD position);
+    uint16_t GetHyperlinkIdAtPosition(const COORD position);
+    std::optional<interval_tree::IntervalTree<til::point, size_t>::interval> GetHyperlinkIntervalFromPosition(const COORD position);
 #pragma endregion
 
 #pragma region IBaseData(base to IRenderData and IUiaData)
@@ -143,8 +165,7 @@ public:
 #pragma region IRenderData
     // These methods are defined in TerminalRenderData.cpp
     const TextAttribute GetDefaultBrushColors() noexcept override;
-    const COLORREF GetForegroundColor(const TextAttribute& attr) const noexcept override;
-    const COLORREF GetBackgroundColor(const TextAttribute& attr) const noexcept override;
+    std::pair<COLORREF, COLORREF> GetAttributeColors(const TextAttribute& attr) const noexcept override;
     COORD GetCursorPosition() const noexcept override;
     bool IsCursorVisible() const noexcept override;
     bool IsCursorOn() const noexcept override;
@@ -156,6 +177,9 @@ public:
     bool IsScreenReversed() const noexcept override;
     const std::vector<Microsoft::Console::Render::RenderOverlay> GetOverlays() const noexcept override;
     const bool IsGridLineDrawingAllowed() noexcept override;
+    const std::wstring GetHyperlinkUri(uint16_t id) const noexcept override;
+    const std::wstring GetHyperlinkCustomId(uint16_t id) const noexcept override;
+    const std::vector<size_t> GetPatternId(const COORD location) const noexcept override;
 #pragma endregion
 
 #pragma region IUiaData
@@ -166,18 +190,32 @@ public:
     void SelectNewRegion(const COORD coordStart, const COORD coordEnd) override;
     const COORD GetSelectionAnchor() const noexcept override;
     const COORD GetSelectionEnd() const noexcept override;
-    const std::wstring GetConsoleTitle() const noexcept override;
+    const std::wstring_view GetConsoleTitle() const noexcept override;
     void ColorSelection(const COORD coordSelectionStart, const COORD coordSelectionEnd, const TextAttribute) override;
 #pragma endregion
 
     void SetWriteInputCallback(std::function<void(std::wstring&)> pfn) noexcept;
+    void SetWarningBellCallback(std::function<void()> pfn) noexcept;
     void SetTitleChangedCallback(std::function<void(const std::wstring_view&)> pfn) noexcept;
+    void SetTabColorChangedCallback(std::function<void(const std::optional<til::color>)> pfn) noexcept;
+    void SetCopyToClipboardCallback(std::function<void(const std::wstring_view&)> pfn) noexcept;
     void SetScrollPositionChangedCallback(std::function<void(const int, const int, const int)> pfn) noexcept;
     void SetCursorPositionChangedCallback(std::function<void()> pfn) noexcept;
-    void SetBackgroundCallback(std::function<void(const COLORREF)> pfn) noexcept;
+    void SetBackgroundCallback(std::function<void(const til::color)> pfn) noexcept;
+    void TaskbarProgressChangedCallback(std::function<void()> pfn) noexcept;
 
     void SetCursorOn(const bool isOn);
     bool IsCursorBlinkingAllowed() const noexcept;
+
+    void UpdatePatterns() noexcept;
+    void ClearPatternTree() noexcept;
+
+    const std::optional<til::color> GetTabColor() const noexcept;
+
+    Microsoft::Console::Render::BlinkingState& GetBlinkingState() const noexcept;
+
+    const size_t GetTaskbarState() const noexcept;
+    const size_t GetTaskbarProgress() const noexcept;
 
 #pragma region TextSelection
     // These methods are defined in TerminalSelection.cpp
@@ -197,25 +235,43 @@ public:
 
 private:
     std::function<void(std::wstring&)> _pfnWriteInput;
+    std::function<void()> _pfnWarningBell;
     std::function<void(const std::wstring_view&)> _pfnTitleChanged;
+    std::function<void(const std::wstring_view&)> _pfnCopyToClipboard;
     std::function<void(const int, const int, const int)> _pfnScrollPositionChanged;
-    std::function<void(const COLORREF)> _pfnBackgroundColorChanged;
+    std::function<void(const til::color)> _pfnBackgroundColorChanged;
     std::function<void()> _pfnCursorPositionChanged;
+    std::function<void(const std::optional<til::color>)> _pfnTabColorChanged;
+    std::function<void()> _pfnTaskbarProgressChanged;
 
     std::unique_ptr<::Microsoft::Console::VirtualTerminal::StateMachine> _stateMachine;
     std::unique_ptr<::Microsoft::Console::VirtualTerminal::TerminalInput> _terminalInput;
 
     std::optional<std::wstring> _title;
     std::wstring _startingTitle;
+    std::optional<til::color> _tabColor;
+    std::optional<til::color> _startingTabColor;
 
+    // This is still stored as a COLORREF because it interacts with some code in ConTypes
     std::array<COLORREF, XTERM_COLOR_TABLE_SIZE> _colorTable;
-    COLORREF _defaultFg;
-    COLORREF _defaultBg;
+    til::color _defaultFg;
+    til::color _defaultBg;
+    CursorType _defaultCursorShape;
+    bool _screenReversed;
+    mutable Microsoft::Console::Render::BlinkingState _blinkingState;
 
     bool _snapOnInput;
     bool _altGrAliasing;
     bool _suppressApplicationTitle;
+    bool _bracketedPasteMode;
+    bool _trimBlockSelection;
 
+    size_t _taskbarState;
+    size_t _taskbarProgress;
+
+    size_t _hyperlinkPatternId;
+
+    std::wstring _workingDirectory;
 #pragma region Text Selection
     // a selection is represented as a range between two COORDs (start and end)
     // the pivot is the COORD that remains selected when you extend a selection in any direction
@@ -257,6 +313,10 @@ private:
     //      underneath them, while others would prefer to anchor it in place.
     //      Either way, we should make this behavior controlled by a setting.
 
+    interval_tree::IntervalTree<til::point, size_t> _patternIntervalTree;
+    void _InvalidatePatternTree(interval_tree::IntervalTree<til::point, size_t>& tree);
+    void _InvalidateFromCoords(const COORD start, const COORD end);
+
     // Since virtual keys are non-zero, you assume that this field is empty/invalid if it is.
     struct KeyEventCodes
     {
@@ -292,10 +352,12 @@ private:
 #pragma region TextSelection
     // These methods are defined in TerminalSelection.cpp
     std::vector<SMALL_RECT> _GetSelectionRects() const noexcept;
-    std::pair<COORD, COORD> _PivotSelection(const COORD targetPos) const;
+    std::pair<COORD, COORD> _PivotSelection(const COORD targetPos, bool& targetStart) const;
     std::pair<COORD, COORD> _ExpandSelectionAnchors(std::pair<COORD, COORD> anchors) const;
     COORD _ConvertToBufferCell(const COORD viewportPos) const;
 #pragma endregion
+
+    Microsoft::Console::VirtualTerminal::SgrStack _sgrStack;
 
 #ifdef UNIT_TESTING
     friend class TerminalCoreUnitTests::TerminalBufferTests;

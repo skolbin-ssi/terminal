@@ -29,8 +29,16 @@ GdiEngine::GdiEngine() :
     _fInvalidRectUsed(false),
     _lastFg(INVALID_COLOR),
     _lastBg(INVALID_COLOR),
+    _lastFontItalic(false),
+    _currentLineTransform(IDENTITY_XFORM),
+    _currentLineRendition(LineRendition::SingleWidth),
     _fPaintStarted(false),
-    _hfont((HFONT)INVALID_HANDLE_VALUE)
+    _invalidCharacters{},
+    _hfont(nullptr),
+    _hfontItalic(nullptr),
+    _pool{ til::pmr::get_default_resource() }, // It's important the pool is first so it can be given to the others on construction.
+    _polyStrings{ &_pool },
+    _polyWidths{ &_pool }
 {
     ZeroMemory(_pPolyText, sizeof(POLYTEXTW) * s_cPolyTextCache);
     _rcInvalid = { 0 };
@@ -39,6 +47,9 @@ GdiEngine::GdiEngine() :
 
     _hdcMemoryContext = CreateCompatibleDC(nullptr);
     THROW_HR_IF_NULL(E_FAIL, _hdcMemoryContext);
+
+    // We need the advanced graphics mode in order to set a transform.
+    SetGraphicsMode(_hdcMemoryContext, GM_ADVANCED);
 
     // On session zero, text GDI APIs might not be ready.
     // Calling GetTextFace causes a wait that will be
@@ -88,6 +99,12 @@ GdiEngine::~GdiEngine()
         _hfont = nullptr;
     }
 
+    if (_hfontItalic != nullptr)
+    {
+        LOG_HR_IF(E_FAIL, !(DeleteObject(_hfontItalic)));
+        _hfontItalic = nullptr;
+    }
+
     if (_hdcMemoryContext != nullptr)
     {
         LOG_HR_IF(E_FAIL, !(DeleteObject(_hdcMemoryContext)));
@@ -111,6 +128,9 @@ GdiEngine::~GdiEngine()
     HDC const hdcNewMemoryContext = CreateCompatibleDC(hdcRealWindow);
     RETURN_HR_IF_NULL(E_FAIL, hdcNewMemoryContext);
 
+    // We need the advanced graphics mode in order to set a transform.
+    SetGraphicsMode(hdcNewMemoryContext, GM_ADVANCED);
+
     // If we had an existing memory context stored, release it before proceeding.
     if (nullptr != _hdcMemoryContext)
     {
@@ -127,6 +147,9 @@ GdiEngine::~GdiEngine()
     {
         LOG_HR_IF_NULL(E_FAIL, SelectFont(_hdcMemoryContext, _hfont));
     }
+
+    // Record the fact that the selected font is not italic.
+    _lastFontItalic = false;
 
     if (nullptr != hdcRealWindow)
     {
@@ -170,21 +193,88 @@ GdiEngine::~GdiEngine()
     return S_OK;
 }
 
+// Routine Description
+// - Resets the world transform to the identity matrix.
+// Arguments:
+// - <none>
+// Return Value:
+// - S_OK if successful. S_FALSE if already reset. E_FAIL if there was an error.
+[[nodiscard]] HRESULT GdiEngine::ResetLineTransform() noexcept
+{
+    // Return early if the current transform is already the identity matrix.
+    RETURN_HR_IF(S_FALSE, _currentLineTransform == IDENTITY_XFORM);
+    // Flush any buffer lines which would be expecting to use the current transform.
+    LOG_IF_FAILED(_FlushBufferLines());
+    // Reset the active transform to the identity matrix.
+    RETURN_HR_IF(E_FAIL, !ModifyWorldTransform(_hdcMemoryContext, nullptr, MWT_IDENTITY));
+    // Reset the current state.
+    _currentLineTransform = IDENTITY_XFORM;
+    _currentLineRendition = LineRendition::SingleWidth;
+    return S_OK;
+}
+
+// Routine Description
+// - Applies an appropriate transform for the given line rendition and viewport offset.
+// Arguments:
+// - lineRendition - The line rendition specifying the scaling of the line.
+// - targetRow - The row on which the line is expected to be rendered.
+// - viewportLeft - The left offset of the current viewport.
+// Return Value:
+// - S_OK if successful. S_FALSE if already set. E_FAIL if there was an error.
+[[nodiscard]] HRESULT GdiEngine::PrepareLineTransform(const LineRendition lineRendition,
+                                                      const size_t targetRow,
+                                                      const size_t viewportLeft) noexcept
+{
+    XFORM lineTransform = {};
+    // The X delta is to account for the horizontal viewport offset.
+    lineTransform.eDx = viewportLeft ? -1.0f * viewportLeft * _GetFontSize().X : 0.0f;
+    switch (lineRendition)
+    {
+    case LineRendition::SingleWidth:
+        lineTransform.eM11 = 1; // single width
+        lineTransform.eM22 = 1; // single height
+        break;
+    case LineRendition::DoubleWidth:
+        lineTransform.eM11 = 2; // double width
+        lineTransform.eM22 = 1; // single height
+        break;
+    case LineRendition::DoubleHeightTop:
+        lineTransform.eM11 = 2; // double width
+        lineTransform.eM22 = 2; // double height
+        // The Y delta is to negate the offset caused by the scaled height.
+        lineTransform.eDy = -1.0f * targetRow * _GetFontSize().Y;
+        break;
+    case LineRendition::DoubleHeightBottom:
+        lineTransform.eM11 = 2; // double width
+        lineTransform.eM22 = 2; // double height
+        // The Y delta is to negate the offset caused by the scaled height.
+        // An extra row is added because we need the bottom half of the line.
+        lineTransform.eDy = -1.0f * (targetRow + 1) * _GetFontSize().Y;
+        break;
+    }
+    // Return early if the new matrix is the same as the current transform.
+    RETURN_HR_IF(S_FALSE, _currentLineRendition == lineRendition && _currentLineTransform == lineTransform);
+    // Flush any buffer lines which would be expecting to use the current transform.
+    LOG_IF_FAILED(_FlushBufferLines());
+    // Set the active transform with the new matrix.
+    RETURN_HR_IF(E_FAIL, !SetWorldTransform(_hdcMemoryContext, &lineTransform));
+    // Save the current state.
+    _currentLineTransform = lineTransform;
+    _currentLineRendition = lineRendition;
+    return S_OK;
+}
+
 // Routine Description:
 // - This method will set the GDI brushes in the drawing context (and update the hung-window background color)
 // Arguments:
-// - colorForeground - Foreground Color
-// - colorBackground - Background colo
-// - legacyColorAttribute - <unused>
-// - extendedAttrs - <unused>
+// - textAttributes - Text attributes to use for the brush color
+// - pData - The interface to console data structures required for rendering
 // - isSettingDefaultBrushes - Lets us know that the default brushes are being set so we can update the DC background
 //                             and the hung app background painting color
 // Return Value:
 // - S_OK if set successfully or relevant GDI error via HRESULT.
-[[nodiscard]] HRESULT GdiEngine::UpdateDrawingBrushes(const COLORREF colorForeground,
-                                                      const COLORREF colorBackground,
-                                                      const WORD /*legacyColorAttribute*/,
-                                                      const ExtendedAttributes /*extendedAttrs*/,
+[[nodiscard]] HRESULT GdiEngine::UpdateDrawingBrushes(const TextAttribute& textAttributes,
+                                                      const gsl::not_null<IRenderData*> pData,
                                                       const bool isSettingDefaultBrushes) noexcept
 {
     RETURN_IF_FAILED(_FlushBufferLines());
@@ -192,6 +282,8 @@ GdiEngine::~GdiEngine()
     RETURN_HR_IF_NULL(HRESULT_FROM_WIN32(ERROR_INVALID_STATE), _hdcMemoryContext);
 
     // Set the colors for painting text
+    const auto [colorForeground, colorBackground] = pData->GetAttributeColors(textAttributes);
+
     if (colorForeground != _lastFg)
     {
         RETURN_HR_IF(E_FAIL, CLR_INVALID == SetTextColor(_hdcMemoryContext, colorForeground));
@@ -212,6 +304,14 @@ GdiEngine::~GdiEngine()
         RETURN_IF_FAILED(s_SetWindowLongWHelper(_hwndTargetWindow, GWL_CONSOLE_BKCOLOR, colorBackground));
     }
 
+    // If the italic attribute has changed, select an appropriate font variant.
+    const auto fontItalic = textAttributes.IsItalic();
+    if (fontItalic != _lastFontItalic)
+    {
+        SelectFont(_hdcMemoryContext, fontItalic ? _hfontItalic : _hfont);
+        _lastFontItalic = fontItalic;
+    }
+
     return S_OK;
 }
 
@@ -225,14 +325,72 @@ GdiEngine::~GdiEngine()
 // - S_OK if set successfully or relevant GDI error via HRESULT.
 [[nodiscard]] HRESULT GdiEngine::UpdateFont(const FontInfoDesired& FontDesired, _Out_ FontInfo& Font) noexcept
 {
-    wil::unique_hfont hFont;
-    RETURN_IF_FAILED(_GetProposedFont(FontDesired, Font, _iCurrentDpi, hFont));
+    wil::unique_hfont hFont, hFontItalic;
+    RETURN_IF_FAILED(_GetProposedFont(FontDesired, Font, _iCurrentDpi, hFont, hFontItalic));
 
     // Select into DC
     RETURN_HR_IF_NULL(E_FAIL, SelectFont(_hdcMemoryContext, hFont.get()));
 
+    // Record the fact that the selected font is not italic.
+    _lastFontItalic = false;
+
     // Save off the font metrics for various other calculations
     RETURN_HR_IF(E_FAIL, !(GetTextMetricsW(_hdcMemoryContext, &_tmFontMetrics)));
+
+    // There is no font metric for the grid line width, so we use a small
+    // multiple of the font size, which typically rounds to a pixel.
+    const auto fontSize = _tmFontMetrics.tmHeight - _tmFontMetrics.tmInternalLeading;
+    _lineMetrics.gridlineWidth = std::lround(fontSize * 0.025);
+
+    OUTLINETEXTMETRICW outlineMetrics;
+    if (GetOutlineTextMetricsW(_hdcMemoryContext, sizeof(outlineMetrics), &outlineMetrics))
+    {
+        // For TrueType fonts, the other line metrics can be obtained from
+        // the font's outline text metric structure.
+        _lineMetrics.underlineOffset = outlineMetrics.otmsUnderscorePosition;
+        _lineMetrics.underlineWidth = outlineMetrics.otmsUnderscoreSize;
+        _lineMetrics.strikethroughOffset = outlineMetrics.otmsStrikeoutPosition;
+        _lineMetrics.strikethroughWidth = outlineMetrics.otmsStrikeoutSize;
+    }
+    else
+    {
+        // If we can't obtain the outline metrics for the font, we just pick
+        // some reasonable values for the offsets and widths.
+        _lineMetrics.underlineOffset = -std::lround(fontSize * 0.05);
+        _lineMetrics.underlineWidth = _lineMetrics.gridlineWidth;
+        _lineMetrics.strikethroughOffset = std::lround(_tmFontMetrics.tmAscent / 3.0);
+        _lineMetrics.strikethroughWidth = _lineMetrics.gridlineWidth;
+    }
+
+    // We always want the lines to be visible, so if a stroke width ends
+    // up being zero, we need to make it at least 1 pixel.
+    _lineMetrics.gridlineWidth = std::max(_lineMetrics.gridlineWidth, 1);
+    _lineMetrics.underlineWidth = std::max(_lineMetrics.underlineWidth, 1);
+    _lineMetrics.strikethroughWidth = std::max(_lineMetrics.strikethroughWidth, 1);
+
+    // Offsets are relative to the base line of the font, so we subtract
+    // from the ascent to get an offset relative to the top of the cell.
+    const auto ascent = _tmFontMetrics.tmAscent;
+    _lineMetrics.underlineOffset = ascent - _lineMetrics.underlineOffset;
+    _lineMetrics.strikethroughOffset = ascent - _lineMetrics.strikethroughOffset;
+
+    // For double underlines we need a second offset, just below the first,
+    // but with a bit of a gap (about double the grid line width).
+    _lineMetrics.underlineOffset2 = _lineMetrics.underlineOffset +
+                                    _lineMetrics.underlineWidth +
+                                    std::lround(fontSize * 0.05);
+
+    // However, we don't want the underline to extend past the bottom of the
+    // cell, so we clamp the offset to fit just inside.
+    const auto maxUnderlineOffset = Font.GetSize().Y - _lineMetrics.underlineWidth;
+    _lineMetrics.underlineOffset2 = std::min(_lineMetrics.underlineOffset2, maxUnderlineOffset);
+
+    // But if the resulting gap isn't big enough even to register as a thicker
+    // line, it's better to place the second line slightly above the first.
+    if (_lineMetrics.underlineOffset2 < _lineMetrics.underlineOffset + _lineMetrics.gridlineWidth)
+    {
+        _lineMetrics.underlineOffset2 = _lineMetrics.underlineOffset - _lineMetrics.gridlineWidth;
+    }
 
     // Now find the size of a 0 in this current font and save it for conversions done later.
     _coordFontLast = Font.GetSize();
@@ -246,6 +404,16 @@ GdiEngine::~GdiEngine()
 
     // Save the font.
     _hfont = hFont.release();
+
+    // Persist italic font for cleanup (and free existing if necessary)
+    if (_hfontItalic != nullptr)
+    {
+        LOG_HR_IF(E_FAIL, !(DeleteObject(_hfontItalic)));
+        _hfontItalic = nullptr;
+    }
+
+    // Save the italic font.
+    _hfontItalic = hFontItalic.release();
 
     // Save raster vs. TrueType and codepage data in case we need to convert.
     _isTrueTypeFont = Font.IsTrueTypeFont();
@@ -293,8 +461,8 @@ GdiEngine::~GdiEngine()
 // - S_OK if set successfully or relevant GDI error via HRESULT.
 [[nodiscard]] HRESULT GdiEngine::GetProposedFont(const FontInfoDesired& FontDesired, _Out_ FontInfo& Font, const int iDpi) noexcept
 {
-    wil::unique_hfont hFont;
-    return _GetProposedFont(FontDesired, Font, iDpi, hFont);
+    wil::unique_hfont hFont, hFontItalic;
+    return _GetProposedFont(FontDesired, Font, iDpi, hFont, hFontItalic);
 }
 
 // Method Description:
@@ -304,7 +472,7 @@ GdiEngine::~GdiEngine()
 // - newTitle: the new string to use for the title of the window
 // Return Value:
 // -  S_OK if PostMessageW succeeded, otherwise E_FAIL
-[[nodiscard]] HRESULT GdiEngine::_DoUpdateTitle(_In_ const std::wstring& /*newTitle*/) noexcept
+[[nodiscard]] HRESULT GdiEngine::_DoUpdateTitle(_In_ const std::wstring_view /*newTitle*/) noexcept
 {
     // the CM_UPDATE_TITLE handler in windowproc will query the updated title.
     return PostMessageW(_hwndTargetWindow, CM_UPDATE_TITLE, 0, (LPARAM) nullptr) ? S_OK : E_FAIL;
@@ -320,12 +488,14 @@ GdiEngine::~GdiEngine()
 // - Font - the actual font
 // - iDpi - The DPI we will have when rendering
 // - hFont - A smart pointer to receive a handle to a ready-to-use GDI font.
+// - hFontItalic - A smart pointer to receive a handle to an italic variant of the font.
 // Return Value:
 // - S_OK if set successfully or relevant GDI error via HRESULT.
 [[nodiscard]] HRESULT GdiEngine::_GetProposedFont(const FontInfoDesired& FontDesired,
                                                   _Out_ FontInfo& Font,
                                                   const int iDpi,
-                                                  _Inout_ wil::unique_hfont& hFont) noexcept
+                                                  _Inout_ wil::unique_hfont& hFont,
+                                                  _Inout_ wil::unique_hfont& hFontItalic) noexcept
 {
     wil::unique_hdc hdcTemp(CreateCompatibleDC(_hdcMemoryContext));
     RETURN_HR_IF_NULL(E_FAIL, hdcTemp.get());
@@ -342,6 +512,7 @@ GdiEngine::~GdiEngine()
         // it may very well decide to choose Courier New instead of the Terminal raster.
 #pragma prefast(suppress : 38037, "raster fonts get special handling, we need to get it this way")
         hFont.reset((HFONT)GetStockObject(OEM_FIXED_FONT));
+        hFontItalic.reset((HFONT)GetStockObject(OEM_FIXED_FONT));
     }
     else
     {
@@ -401,6 +572,11 @@ GdiEngine::~GdiEngine()
         // Create font.
         hFont.reset(CreateFontIndirectW(&lf));
         RETURN_HR_IF_NULL(E_FAIL, hFont.get());
+
+        // Create italic variant of the font.
+        lf.lfItalic = TRUE;
+        hFontItalic.reset(CreateFontIndirectW(&lf));
+        RETURN_HR_IF_NULL(E_FAIL, hFontItalic.get());
     }
 
     // Select into DC

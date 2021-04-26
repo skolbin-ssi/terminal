@@ -1,12 +1,12 @@
 {
-  "$id": "https://github.com/microsoft/terminal/blob/master/doc/cascadia/profiles.schema.json",
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/microsoft/terminal/blob/main/doc/cascadia/profiles.schema.json",
+  "$schema": "https://json-schema.org/draft/2019-09/schema#",
   "title": "Microsoft's Windows Terminal Settings Profile Schema",
   "definitions": {
     "KeyChordSegment": {
-      "pattern": "^(?<modifier>(ctrl|alt|shift)(?:\\+(ctrl|alt|shift)(?<!\\2))?(?:\\+(ctrl|alt|shift)(?<!\\2|\\3))?\\+)?(?<key>[^\\s+]|backspace|tab|enter|esc|escape|space|pgup|pageup|pgdn|pagedown|end|home|left|up|right|down|insert|delete|(?<!shift.+)(?:numpad_?[0-9]|numpad_(?:period|decimal))|numpad_(?:multiply|plus|add|minus|subtract|divide)|f[1-9]|f1[0-9]|f2[0-4]|plus)$",
+      "pattern": "^(?<modifier>(?<mod1>ctrl|alt|shift|win)(?:\\+(?<mod2>ctrl|alt|shift|win)(?<!\\k<mod1>))?(?:\\+(?<mod3>ctrl|alt|shift|win)(?<!\\k<mod1>|\\k<mod2>))?(?:\\+(?<mod4>ctrl|alt|shift|win)(?<!\\k<mod1>|\\k<mod2>|\\k<mod3>))?\\+)?(?<key>[^\\s+]|app|menu|backspace|tab|enter|esc|escape|space|pgup|pageup|pgdn|pagedown|end|home|left|up|right|down|insert|delete|(?<!shift.+)(?:numpad_?[0-9]|numpad_(?:period|decimal))|numpad_(?:multiply|plus|add|minus|subtract|divide)|f[1-9]|f1[0-9]|f2[0-4]|plus)$",
       "type": "string",
-      "description": "The string should fit the format \"[ctrl+][alt+][shift+]<keyName>\", where each modifier is optional, separated by + symbols, and keyName is either one of the names listed in the table below, or any single key character. The string should be written in full lowercase.\nbackspace\tBACKSPACE key\ntab\tTAB key\nenter\tENTER key\nesc, escape\tESC key\nspace\tSPACEBAR\npgup, pageup\tPAGE UP key\npgdn, pagedown\tPAGE DOWN key\nend\tEND key\nhome\tHOME key\nleft\tLEFT ARROW key\nup\tUP ARROW key\nright\tRIGHT ARROW key\ndown\tDOWN ARROW key\ninsert\tINS key\ndelete\tDEL key\nnumpad_0-numpad_9, numpad0-numpad9\tNumeric keypad keys 0 to 9. Can't be combined with the shift modifier.\nnumpad_multiply\tNumeric keypad MULTIPLY key (*)\nnumpad_plus, numpad_add\tNumeric keypad ADD key (+)\nnumpad_minus, numpad_subtract\tNumeric keypad SUBTRACT key (-)\nnumpad_period, numpad_decimal\tNumeric keypad DECIMAL key (.). Can't be combined with the shift modifier.\nnumpad_divide\tNumeric keypad DIVIDE key (/)\nf1-f24\tF1 to F24 function keys\nplus\tADD key (+)"
+      "description": "The string should fit the format \"[ctrl+][alt+][shift+][win+]<keyName>\", where each modifier is optional, separated by + symbols, and keyName is either one of the names listed in the table below, or any single key character. The string should be written in full lowercase.\napp, menu\tMENU key\nbackspace\tBACKSPACE key\ntab\tTAB key\nenter\tENTER key\nesc, escape\tESC key\nspace\tSPACEBAR\npgup, pageup\tPAGE UP key\npgdn, pagedown\tPAGE DOWN key\nend\tEND key\nhome\tHOME key\nleft\tLEFT ARROW key\nup\tUP ARROW key\nright\tRIGHT ARROW key\ndown\tDOWN ARROW key\ninsert\tINS key\ndelete\tDEL key\nnumpad_0-numpad_9, numpad0-numpad9\tNumeric keypad keys 0 to 9. Can't be combined with the shift modifier.\nnumpad_multiply\tNumeric keypad MULTIPLY key (*)\nnumpad_plus, numpad_add\tNumeric keypad ADD key (+)\nnumpad_minus, numpad_subtract\tNumeric keypad SUBTRACT key (-)\nnumpad_period, numpad_decimal\tNumeric keypad DECIMAL key (.). Can't be combined with the shift modifier.\nnumpad_divide\tNumeric keypad DIVIDE key (/)\nf1-f24\tF1 to F24 function keys\nplus\tADD key (+)"
     },
     "Color": {
       "default": "#",
@@ -26,41 +26,220 @@
       ],
       "type": "string"
     },
+    "BellStyle": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "audible",
+              "visual"
+            ]
+          }
+        },
+        {
+          "type": "string",
+          "enum": [
+            "audible",
+            "visual",
+            "all",
+            "none"
+          ]
+        }
+      ]
+    },
+    "AppearanceConfig": {
+      "properties": {
+        "colorScheme": {
+          "description": "The name of a color scheme to use when unfocused.",
+          "type": "string"
+        },
+        "foreground": {
+          "$ref": "#/definitions/Color",
+          "default": "#cccccc",
+          "description": "Sets the text color when unfocused. Overrides \"foreground\" from the color scheme. Uses hex color format: \"#rrggbb\".",
+          "type": ["string", "null"]
+        },
+        "background": {
+          "$ref": "#/definitions/Color",
+          "default": "#0c0c0c",
+          "description": "Sets the background color of the text when unfocused. Overrides \"background\" from the color scheme. Uses hex color format: \"#rrggbb\".",
+          "type": ["string", "null"]
+        },
+        "selectionBackground": {
+          "oneOf": [
+            {"$ref": "#/definitions/Color"},
+            { "type": "null" }
+          ],
+          "description": "Sets the background color of selected text when unfocused. Overrides selectionBackground set in the color scheme. Uses hex color format: \"#rrggbb\"."
+        },
+        "cursorColor": {
+          "oneOf": [
+            { "$ref": "#/definitions/Color" },
+            {"type": "null"}
+          ],
+          "description": "Sets the color of the cursor when unfocused. Overrides the cursor color from the color scheme. Uses hex color format: \"#rrggbb\"."
+        },
+        "cursorShape": {
+          "default": "bar",
+          "description": "Sets the shape of the cursor when unfocused. Possible values:\n -\"bar\" ( ┃, default )\n -\"doubleUnderscore\" ( ‗ )\n -\"emptyBox\" ( ▯ )\n -\"filledBox\" ( █ )\n -\"underscore\" ( ▁ )\n -\"vintage\" ( ▃ )",
+          "enum": [
+            "bar",
+            "doubleUnderscore",
+            "emptyBox",
+            "filledBox",
+            "underscore",
+            "vintage"
+          ],
+          "type": "string"
+        },
+        "cursorHeight": {
+          "description": "Sets the percentage height of the cursor (when unfocused) starting from the bottom. Only works when cursorShape is set to \"vintage\". Accepts values from 1-100.",
+          "maximum": 100,
+          "minimum": 1,
+          "type": ["integer","null"],
+          "default": 25
+        },
+        "backgroundImage": {
+          "description": "Sets the file location of the image to draw over the window background when unfocused.",
+          "oneOf": [
+            {
+              "type": ["string", null]
+            },
+            {
+              "enum": [
+                "desktopWallpaper"
+              ]
+            }
+          ],
+          "type": [ "string", "null" ]
+        },
+        "backgroundImageOpacity": {
+          "default": 1.0,
+          "description": "Sets the transparency of the background image when unfocused. Accepts floating point values from 0-1.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "backgroundImageStretchMode": {
+          "default": "uniformToFill",
+          "description": "Sets how the background image is resized to fill the window when unfocused.",
+          "enum": [
+            "fill",
+            "none",
+            "uniform",
+            "uniformToFill"
+          ],
+          "type": "string"
+        },
+        "backgroundImageAlignment": {
+          "default": "center",
+          "enum": [
+            "bottom",
+            "bottomLeft",
+            "bottomRight",
+            "center",
+            "left",
+            "right",
+            "top",
+            "topLeft",
+            "topRight"
+          ],
+          "description": "Sets how the background image aligns to the boundaries of the window when unfocused. Possible values: \"center\", \"left\", \"top\", \"right\", \"bottom\", \"topLeft\", \"topRight\", \"bottomLeft\", \"bottomRight\"",
+          "type": "string"
+        },
+        "experimental.retroTerminalEffect": {
+          "description": "When set to true, enable retro terminal effects when unfocused. This is an experimental feature, and its continued existence is not guaranteed.",
+          "type": "boolean"
+        },
+        "experimental.pixelShaderPath": {
+          "description": "Use to set a path to a pixel shader to use with the Terminal when unfocused. Overrides `experimental.retroTerminalEffect`. This is an experimental feature, and its continued existence is not guaranteed.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "ProfileGuid": {
       "default": "{}",
       "pattern": "^\\{[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}\\}$",
       "type": "string"
     },
+    "Icon": {
+      "description": "Image file location or an emoji to be used as an icon. Displays within the tab, the dropdown menu, and jumplist.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "ShortcutActionName": {
       "enum": [
         "adjustFontSize",
+        "closeOtherTabs",
         "closePane",
         "closeTab",
+        "closeTabsAfter",
         "closeWindow",
+        "commandPalette",
         "copy",
         "duplicateTab",
+        "find",
+        "findMatch",
+        "identifyWindow",
+        "identifyWindows",
         "moveFocus",
+        "moveTab",
         "newTab",
+        "newWindow",
         "nextTab",
         "openNewTabDropdown",
         "openSettings",
+        "openTabColorPicker",
+        "openWindowRenamer",
         "paste",
         "prevTab",
+        "renameTab",
+        "openTabRenamer",
         "resetFontSize",
         "resizePane",
+        "renameWindow",
         "scrollDown",
         "scrollDownPage",
         "scrollUp",
         "scrollUpPage",
+        "scrollToBottom",
+        "scrollToTop",
+        "sendInput",
+        "setColorScheme",
+        "setTabColor",
         "splitPane",
         "switchToTab",
+        "tabSearch",
+        "toggleAlwaysOnTop",
+        "toggleFocusMode",
         "toggleFullscreen",
-        "find",
+        "togglePaneZoom",
+        "toggleReadOnlyMode",
+        "toggleShaderEffects",
+        "wt",
         "unbound"
       ],
       "type": "string"
     },
-    "Direction": {
+    "FocusDirection": {
+      "enum": [
+        "left",
+        "right",
+        "up",
+        "down",
+        "previous"
+      ],
+      "type": "string"
+    },
+    "ResizeDirection": {
       "enum": [
         "left",
         "right",
@@ -69,11 +248,66 @@
       ],
       "type": "string"
     },
+    "MoveTabDirection": {
+      "enum": [
+        "forward",
+        "backward"
+      ],
+      "type": "string"
+    },
+    "FindMatchDirection": {
+      "enum": [
+        "next",
+        "prev"
+      ],
+      "type": "string"
+    },
     "SplitState": {
       "enum": [
         "vertical",
         "horizontal",
         "auto"
+      ],
+      "type": "string"
+    },
+    "CopyFormat": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "html",
+              "rtf"
+            ]
+          }
+        },
+        {
+          "type": "string",
+          "enum": [
+            "html",
+            "rtf",
+            "all",
+            "none"
+          ]
+        }
+      ]
+    },
+    "AnchorKey": {
+      "enum": [
+        "ctrl",
+        "alt",
+        "shift"
+      ],
+      "type": "string"
+    },
+    "CommandPaletteLaunchMode": {
+      "enum": [
+        "action",
+        "commandLine"
       ],
       "type": "string"
     },
@@ -98,9 +332,36 @@
         "index": {
           "type": "integer",
           "description": "The index of the profile in the new tab dropdown (starting at 0)"
+        },
+        "tabColor": {
+          "$ref": "#/definitions/Color",
+          "default": null,
+          "description": "If provided, will set the tab's color to the given value"
+        },
+        "suppressApplicationTitle": {
+          "type": "boolean",
+          "default": "false",
+          "description": "When set to true, tabTitle overrides the default title of the tab and any title change messages from the application will be suppressed. When set to false, tabTitle behaves as normal"
+        },
+        "colorScheme": {
+          "description": "The name of a color scheme to use, instead of the one specified by the profile",
+          "type": "string"
         }
       },
       "type": "object"
+    },
+    "SwitchToAdjacentTabArgs" : {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "enum": [
+            "mru",
+            "inOrder",
+            "disabled"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ShortcutAction": {
       "properties": {
@@ -142,6 +403,18 @@
               "type": "boolean",
               "default": false,
               "description": "If true, the copied content will be copied as a single line (even if there are hard line breaks present in the text). If false, newlines persist from the selected text."
+            },
+            "copyFormatting": {
+              "default": null,
+              "description": "When set to `true`, the color and font formatting of selected text is also copied to your clipboard. When set to `false`, only plain text is copied to your clipboard. An array of specific formats can also be used. Supported array values include `html` and `rtf`. Plain text is always copied. Not setting this value inherits the behavior of the `copyFormatting` global setting.",
+              "oneOf": [
+                {
+                  "$ref": "#/definitions/CopyFormat"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           }
         }
@@ -184,9 +457,9 @@
           "properties": {
             "action": { "type": "string", "pattern": "moveFocus" },
             "direction": {
-              "$ref": "#/definitions/Direction",
+              "$ref": "#/definitions/FocusDirection",
               "default": "left",
-              "description": "The direction to move focus in, between panes"
+              "description": "The direction to move focus in, between panes. Direction can be 'previous' to move to the most recently used pane."
             }
           }
         }
@@ -201,14 +474,33 @@
           "properties": {
             "action": { "type": "string", "pattern": "resizePane" },
             "direction": {
-              "$ref": "#/definitions/Direction",
+              "$ref": "#/definitions/ResizeDirection",
               "default": "left",
-              "description": "The direction to move the pane separator in"
+              "description": "The direction to move the pane separator in."
             }
           }
         }
       ],
       "required": [ "direction" ]
+    },
+    "SendInputAction": {
+      "description": "Arguments corresponding to a Send Input Action",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ShortcutAction"
+        },
+        {
+          "properties": {
+            "action": { "type": "string", "pattern": "sendInput" },
+            "input": {
+              "type": "string",
+              "default": "",
+              "description": "The text input to feed into the shell. ANSI escape sequences may be used. Escape codes like \\x1b must be written as \\u001b."
+            }
+          }
+        }
+      ],
+      "required": [ "input" ]
     },
     "SplitPaneAction": {
       "description": "Arguments corresponding to a Split Pane Action",
@@ -226,6 +518,13 @@
             "splitMode": {
               "default": "duplicate",
               "description": "Control how the pane splits. Only accepts \"duplicate\" which will duplicate the focused pane's profile into a new pane."
+            },
+            "size": {
+              "default": 0.5,
+              "description": "Specify how large the new pane should be, as a fraction of the current pane's size. 1.0 would be 'all of the current pane', and 0.0 is 'None of the parent'. Accepts floating point values from 0-1 (default 0.5).",
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
             }
           }
         }
@@ -239,10 +538,7 @@
         },
         {
           "properties": {
-            "action": {
-              "type": "string",
-              "pattern": "openSettings"
-            },
+            "action": { "type": "string", "pattern": "openSettings" },
             "target": {
               "type": "string",
               "default": "settingsFile",
@@ -252,6 +548,251 @@
                 "defaultsFile",
                 "allFiles"
               ]
+            }
+          }
+        }
+      ]
+    },
+    "SetTabColorAction": {
+      "description": "Arguments corresponding to a Set Tab Color Action",
+      "allOf": [
+        { "$ref": "#/definitions/ShortcutAction" },
+        {
+          "properties": {
+            "action": { "type": "string", "pattern": "setTabColor" },
+            "color": {
+              "$ref": "#/definitions/Color",
+              "default": null,
+              "description": "If provided, will set the tab's color to the given value. If omitted, will reset the tab's color."
+            }
+          }
+        }
+      ]
+    },
+    "SetColorSchemeAction": {
+      "description": "Arguments corresponding to a Set Color Scheme Action",
+      "allOf": [
+        { "$ref": "#/definitions/ShortcutAction" },
+        {
+          "properties": {
+            "action": { "type": "string", "pattern": "setColorScheme" },
+            "colorScheme": {
+              "type": "string",
+              "default": "",
+              "description": "the name of the scheme to apply to the active pane"
+            }
+          }
+        }
+      ],
+      "required": [ "colorScheme" ]
+    },
+    "WtAction": {
+      "description": "Arguments corresponding to a wt Action",
+      "allOf": [
+        { "$ref": "#/definitions/ShortcutAction" },
+        {
+          "properties": {
+            "action": { "type": "string", "pattern": "wt" },
+            "commandline": {
+              "type": "string",
+              "default": "",
+              "description": "a `wt` commandline to run in the current window"
+            }
+          }
+        }
+      ],
+      "required": [ "commandline" ]
+    },
+    "CloseOtherTabsAction": {
+      "description": "Arguments for a closeOtherTabs action",
+      "allOf": [
+        { "$ref": "#/definitions/ShortcutAction" },
+        {
+          "properties": {
+            "action": { "type": "string", "pattern": "closeOtherTabs" },
+            "index": {
+              "oneOf": [
+                { "type": "integer" },
+                { "type": "null" }
+              ],
+              "default": null,
+              "description": "Close the tabs other than the one at this index. If no index is provided, use the focused tab's index."
+            }
+          }
+        }
+      ]
+    },
+    "CloseTabsAfterAction": {
+      "description": "Arguments for a closeTabsAfter action",
+      "allOf": [
+        { "$ref": "#/definitions/ShortcutAction" },
+        {
+          "properties": {
+            "action": { "type": "string", "pattern": "closeTabsAfter" },
+            "index": {
+              "oneOf": [
+                { "type": "integer" },
+                { "type": "null" }
+              ],
+              "default": null,
+              "description": "Close the tabs following the tab at this index. If no index is provided, use the focused tab's index."
+            }
+          }
+        }
+      ]
+    },
+    "ScrollUpAction": {
+      "description": "Arguments for a scrollUp action",
+      "allOf": [
+        { "$ref": "#/definitions/ShortcutAction" },
+        {
+          "properties": {
+            "action": { "type": "string", "pattern": "scrollUp" },
+            "rowsToScroll": {
+              "type": ["integer", "null"],
+              "default": null,
+              "description": "Scroll up rowsToScroll lines. If no value is provided, use the system-level defaults."
+            }
+          }
+        }
+      ]
+    },
+    "ScrollDownAction": {
+      "description": "Arguments for a scrollDown action",
+      "allOf": [
+        { "$ref": "#/definitions/ShortcutAction" },
+        {
+          "properties": {
+            "action": { "type": "string", "pattern": "scrollDown" },
+            "rowsToScroll": {
+              "type": ["integer", "null"],
+              "default": null,
+              "description": "Scroll down rowsToScroll lines. If no value is provided, use the system-level defaults."
+            }
+          }
+        }
+      ]
+    },
+    "MoveTabAction": {
+      "description": "Arguments for moving a tab",
+      "allOf": [
+        { "$ref": "#/definitions/ShortcutAction" },
+        {
+          "properties": {
+            "action": { "type": "string", "pattern": "moveTab" },
+            "direction": {
+              "$ref": "#/definitions/MoveTabDirection",
+              "description": "The direction to move the tab"
+            }
+          }
+        }
+      ],
+      "required": [ "direction" ]
+    },
+    "CommandPaletteAction": {
+      "description": "Arguments for a commandPalette action",
+      "allOf": [
+        { "$ref": "#/definitions/ShortcutAction" },
+        {
+          "properties": {
+            "action": { "type": "string", "pattern": "commandPalette" },
+            "launchMode": {
+              "$ref": "#/definitions/CommandPaletteLaunchMode",
+              "default": "action",
+              "description": "Toggle command palette in either action or command line mode. If no value is provided, the palette will launch in action mode."
+            }
+          }
+        }
+      ]
+    },
+    "FindMatchAction": {
+      "description": "Arguments corresponding to a Find Match Action",
+      "allOf": [
+        { "$ref": "#/definitions/ShortcutAction" },
+        {
+          "properties": {
+            "action": { "type": "string", "pattern": "findMatch" },
+            "direction": {
+              "$ref": "#/definitions/FindMatchDirection",
+              "default": "prev",
+              "description": "The direction to search in. \"prev\" will search upwards in the buffer, and \"next\" will search downwards."
+            }
+          }
+        }
+      ],
+      "required": [ "direction" ]
+    },
+    "NewWindowAction": {
+      "description": "Arguments corresponding to a New Window Action",
+      "allOf": [
+        { "$ref": "#/definitions/ShortcutAction" },
+        { "$ref": "#/definitions/NewTerminalArgs" },
+        {
+          "properties": {
+            "action": { "type":"string", "pattern": "newWindow" }
+          }
+        }
+      ]
+    },
+    "PrevTabAction": {
+      "description": "Arguments corresponding to a Previous Tab Action",
+      "allOf": [
+        { "$ref": "#/definitions/ShortcutAction" },
+        {
+          "properties": {
+            "action": { "type":"string", "pattern": "prevTab" },
+            "tabSwitcherMode": {
+              "$ref": "#/definitions/SwitchToAdjacentTabArgs",
+              "default": null,
+              "description": "Move to the previous tab using \"tabSwitcherMode\". If no mode is provided, use the one globally defined one."
+            }
+          }
+        }
+      ]
+    },
+    "NextTabAction": {
+      "description": "Arguments corresponding to a Next Tab Action",
+      "allOf": [
+        { "$ref": "#/definitions/ShortcutAction" },
+        {
+          "properties": {
+            "action": { "type":"string", "pattern": "nextTab" },
+            "tabSwitcherMode": {
+              "$ref": "#/definitions/SwitchToAdjacentTabArgs",
+              "default": null,
+              "description": "Move to the next tab using \"tabSwitcherMode\". If no mode is provided, use the one globally defined one."
+            }
+          }
+        }
+      ]
+    },
+    "RenameTabAction": {
+      "description": "Arguments corresponding to a renameTab Action",
+      "allOf": [
+        { "$ref": "#/definitions/ShortcutAction" },
+        {
+          "properties": {
+            "action": { "type": "string", "pattern": "renameTab" },
+            "title": {
+              "type": "string",
+              "default": "",
+              "description": "A title to assign to the tab. If omitted or null, this action will restore the tab's title to the original value."
+            }
+          }
+        }
+      ]
+    },
+    "RenameWindowAction": {
+      "description": "Arguments corresponding to a renameWindow Action",
+      "allOf": [
+        { "$ref": "#/definitions/ShortcutAction" },
+        {
+          "properties": {
+            "action": { "type": "string", "pattern": "renameWindow" },
+            "name": {
+              "type": "string",
+              "default": "",
+              "description": "A name to assign to the window."
             }
           }
         }
@@ -270,8 +811,23 @@
               { "$ref": "#/definitions/SwitchToTabAction" },
               { "$ref": "#/definitions/MoveFocusAction" },
               { "$ref": "#/definitions/ResizePaneAction" },
+              { "$ref": "#/definitions/SendInputAction" },
               { "$ref": "#/definitions/SplitPaneAction" },
               { "$ref": "#/definitions/OpenSettingsAction" },
+              { "$ref": "#/definitions/SetTabColorAction" },
+              { "$ref": "#/definitions/SetColorSchemeAction" },
+              { "$ref": "#/definitions/WtAction" },
+              { "$ref": "#/definitions/CloseOtherTabsAction" },
+              { "$ref": "#/definitions/CloseTabsAfterAction" },
+              { "$ref": "#/definitions/ScrollUpAction" },
+              { "$ref": "#/definitions/ScrollDownAction" },
+              { "$ref": "#/definitions/MoveTabAction" },
+              { "$ref": "#/definitions/FindMatchAction" },
+              { "$ref": "#/definitions/NewWindowAction" },
+              { "$ref": "#/definitions/NextTabAction" },
+              { "$ref": "#/definitions/PrevTabAction" },
+              { "$ref": "#/definitions/RenameTabAction" },
+              { "$ref": "#/definitions/RenameWindowAction" },
               { "type": "null" }
             ]
         },
@@ -289,6 +845,14 @@
               "type": "array"
             }
           ]
+        },
+        "icon": { "$ref": "#/definitions/Icon" },
+        "name": {
+          "description": "The name that will appear in the command palette. If one isn't provided, the terminal will attempt to automatically generate a name.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -301,9 +865,24 @@
       "additionalProperties": true,
       "description": "Properties that affect the entire window, regardless of the profile settings.",
       "properties": {
+        "alwaysOnTop": {
+          "default": false,
+          "description": "When set to true, the window is created on top of all other windows. If multiple windows are all \"always on top\", the most recently focused one will be the topmost",
+          "type": "boolean"
+        },
         "alwaysShowTabs": {
           "default": true,
           "description": "When set to true, tabs are always displayed. When set to false and \"showTabsInTitlebar\" is set to false, tabs only appear after opening a new tab.",
+          "type": "boolean"
+        },
+        "centerOnLaunch": {
+          "default": false,
+          "description": "When set to `true`, the terminal window will auto-center itself on the display it opens on. The terminal will use the \"initialPosition\" to determine which display to open on.",
+          "type": "boolean"
+        },
+        "inputServiceWarning": {
+          "default": true,
+          "description": "Warning if 'Touch Keyboard and Handwriting Panel Service' is disabled.",
           "type": "boolean"
         },
         "copyOnSelect": {
@@ -311,13 +890,42 @@
           "description": "When set to true, a selection is immediately copied to your clipboard upon creation. When set to false, the selection persists and awaits further action.",
           "type": "boolean"
         },
+        "focusFollowMouse": {
+          "default": false,
+          "description": "When set to true, the terminal will focus the pane on mouse hover.",
+          "type": "boolean"
+        },
         "copyFormatting": {
           "default": true,
-          "description": "When set to `true`, the color and font formatting of selected text is also copied to your clipboard. When set to `false`, only plain text is copied to your clipboard.",
+          "description": "When set to `true`, the color and font formatting of selected text is also copied to your clipboard. When set to `false`, only plain text is copied to your clipboard. An array of specific formats can also be used. Supported array values include `html` and `rtf`. Plain text is always copied.",
+          "$ref": "#/definitions/CopyFormat"
+        },
+        "trimBlockSelection": {
+          "default": false,
+          "description": "When set to true, trailing white-spaces will be removed from text in rectangular (block) selection while copied to your clipboard. When set to false, the white-spaces will be preserved.",
+          "type": "boolean"
+        },
+        "disableAnimations": {
+          "default": false,
+          "description": "When set to `true`, visual animations will be disabled across the application.",
+          "type": "boolean"
+        },
+        "largePasteWarning": {
+          "default": true,
+          "description": "When set to true, trying to paste text with more than 5 KiB of characters will display a warning asking you whether to continue or not with the paste.",
+          "type": "boolean"
+        },
+        "multiLinePasteWarning": {
+          "default": true,
+          "description": "When set to true, trying to paste text with a \"new line\" character will display a warning asking you whether to continue or not with the paste.",
           "type": "boolean"
         },
         "defaultProfile": {
           "description": "Sets the default profile. Opens by clicking the \"+\" icon or typing the key binding assigned to \"newTab\".",
+          "type": "string"
+        },
+        "startupActions": {
+          "description": "Sets the list of actions to apply if no command line is provided. Uses the same format as command line arguments",
           "type": "string"
         },
         "disabledProfileSources": {
@@ -337,37 +945,46 @@
         },
         "initialCols": {
           "default": 120,
-          "description": "The number of columns displayed in the window upon first load.",
+          "description": "The number of columns displayed in the window upon first load. If \"launchMode\" is set to \"maximized\" (or \"maximizedFocus\"), this property is ignored.",
           "maximum": 999,
           "minimum": 1,
           "type": "integer"
         },
         "initialPosition": {
           "$ref": "#/definitions/Coordinates",
-          "description": "The position of the top left corner of the window upon first load. On a system with multiple displays, these coordinates are relative to the top left of the primary display. If \"launchMode\" is set to maximized, the window will be maximized on the monitor specified by those coordinates."
+          "description": "The position of the top left corner of the window upon first load. On a system with multiple displays, these coordinates are relative to the top left of the primary display. If \"launchMode\" is set to \"maximized\" (or \"maximizedFocus\"), the window will be maximized on the monitor specified by those coordinates."
         },
         "initialRows": {
           "default": 30,
-          "description": "The number of rows displayed in the window upon first load.",
+          "description": "The number of rows displayed in the window upon first load. If \"launchMode\" is set to \"maximized\" (or \"maximizedFocus\"), this property is ignored.",
           "maximum": 999,
           "minimum": 1,
           "type": "integer"
         },
+        "startOnUserLogin": {
+          "default": false,
+          "description": "When set to true, this enables the launch of Windows Terminal at startup. Setting this to false will disable the startup task entry. If the Windows Terminal startup task entry is disabled either by org policy or by user action this setting will have no effect.",
+          "type": "boolean"
+        },
         "launchMode": {
           "default": "default",
-          "description": "Defines whether the Terminal will launch as maximized or not.",
+          "description": "Defines whether the terminal will launch as maximized, full screen, or in a window. Setting this to \"focus\" is equivalent to launching the terminal in the \"default\" mode, but with the focus mode enabled. Similar, setting this to \"maximizedFocus\" will result in launching the terminal in a maximized window with the focus mode enabled.",
           "enum": [
+            "fullscreen",
             "maximized",
-            "default"
+            "default",
+            "focus",
+            "maximizedFocus"
           ],
           "type": "string"
         },
         "rowsToScroll": {
           "default": "system",
-          "description": "The number of rows to scroll at a time with the mouse wheel. This will override the system setting if the value is not zero or \"system\".",
+          "description": "This parameter once allowed you to override the systemwide \"choose how many lines to scroll at one time\" setting. It no longer does so. However, you can customize the number of lines to scroll in \"scrollUp\" and \"scrollDown\" bindings.",
           "maximum": 999,
           "minimum": 0,
-          "type": [ "integer", "string" ]
+          "type": [ "integer", "string" ],
+          "deprecated": true
         },
         "keybindings": {
           "description": "Properties are specific to each custom key binding.",
@@ -420,6 +1037,51 @@
           "default": true,
           "description": "When set to \"true\" closing a window with multiple tabs open will require confirmation.  When set to \"false\", the confirmation dialog will not appear.",
           "type": "boolean"
+        },
+        "useTabSwitcher": {
+          "default": true,
+          "description": "Deprecated. Please use \"tabSwitcherMode\" instead.",
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                "mru",
+                "inOrder",
+                "disabled"
+              ],
+              "type": "string"
+            }
+          ],
+          "deprecated": true
+        },
+        "tabSwitcherMode": {
+          "default": "inOrder",
+          "description": "When set to \"true\" or \"mru\", the \"nextTab\" and \"prevTab\" commands will use the tab switcher UI, with most-recently-used ordering. When set to \"inOrder\", these actions will switch tabs in their current ordering. Set to \"false\" to disable the tab switcher.",
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                "mru",
+                "inOrder",
+                "disabled"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "windowingBehavior": {
+          "default": "useNew",
+          "description": "Controls how new terminal instances attach to existing windows. \"useNew\" will always create a new window. \"useExisting\" will create new tabs in the most recently used window on this virtual desktop, and \"useAnyExisting\" will create tabs in the most recent window on any desktop.",
+          "enum": [
+            "useNew",
+            "useExisting",
+            "useAnyExisting"
+          ],
+          "type": "string"
         }
       },
       "required": [
@@ -454,9 +1116,24 @@
           "description": "Sets the background color of the text. Overrides \"background\" from the color scheme. Uses hex color format: \"#rrggbb\".",
           "type": ["string", "null"]
         },
+        "unfocusedAppearance": {
+          "$ref": "#/definitions/AppearanceConfig",
+          "description": "Sets the appearance of the terminal when it is unfocused.",
+          "type": ["object", "null"]
+        },
         "backgroundImage": {
           "description": "Sets the file location of the image to draw over the window background.",
-          "type": ["string", "null"]
+          "oneOf": [
+            {
+              "type": ["string", null]
+            },
+            {
+              "enum": [
+                "desktopWallpaper"
+              ]
+            }
+          ],
+          "type": [ "string", "null" ]
         },
         "backgroundImageAlignment": {
           "default": "center",
@@ -492,6 +1169,11 @@
           ],
           "type": "string"
         },
+        "bellStyle": {
+          "default": "audible",
+          "description": "Controls what happens when the application emits a BEL character. When set to \"all\", the Terminal will play a sound and flash the taskbar icon. An array of specific behaviors can also be used. Supported array values include `audible` and `visual`. When set to \"none\", nothing will happen.",
+          "$ref": "#/definitions/BellStyle"
+        },
         "closeOnExit": {
           "default": "graceful",
           "description": "Sets how the profile reacts to termination or failure to launch. Possible values:\n -\"graceful\" (close when exit is typed or the process exits normally)\n -\"always\" (always close)\n -\"never\" (never close).\ntrue and false are accepted as synonyms for \"graceful\" and \"never\" respectively.",
@@ -526,17 +1208,18 @@
           "description": "Sets the color of the cursor. Overrides the cursor color from the color scheme. Uses hex color format: \"#rrggbb\"."
         },
         "cursorHeight": {
-          "description": "Sets the percentage height of the cursor starting from the bottom. Only works when cursorShape is set to \"vintage\". Accepts values from 25-100.",
+          "description": "Sets the percentage height of the cursor starting from the bottom. Only works when cursorShape is set to \"vintage\". Accepts values from 1-100.",
           "maximum": 100,
-          "minimum": 25,
+          "minimum": 1,
           "type": ["integer","null"],
           "default": 25
         },
         "cursorShape": {
           "default": "bar",
-          "description": "Sets the shape of the cursor. Possible values:\n -\"bar\" ( ┃, default )\n -\"emptyBox\" ( ▯ )\n -\"filledBox\" ( █ )\n -\"underscore\" ( ▁ )\n -\"vintage\" ( ▃ )",
+          "description": "Sets the shape of the cursor. Possible values:\n -\"bar\" ( ┃, default )\n -\"doubleUnderscore\" ( ‗ )\n -\"emptyBox\" ( ▯ )\n -\"filledBox\" ( █ )\n -\"underscore\" ( ▁ )\n -\"vintage\" ( ▃ )",
           "enum": [
             "bar",
+            "doubleUnderscore",
             "emptyBox",
             "filledBox",
             "underscore",
@@ -547,6 +1230,10 @@
         "experimental.retroTerminalEffect": {
           "description": "When set to true, enable retro terminal effects. This is an experimental feature, and its continued existence is not guaranteed.",
           "type": "boolean"
+        },
+        "experimental.pixelShaderPath": {
+          "description": "Use to set a path to a pixel shader to use with the Terminal. Overrides `experimental.retroTerminalEffect`. This is an experimental feature, and its continued existence is not guaranteed.",
+          "type": "string"
         },
         "fontFace": {
           "default": "Cascadia Mono",
@@ -561,7 +1248,7 @@
         },
         "fontWeight": {
           "default": "normal",
-          "description": "Sets the weight (lightness or heaviness of the strokes) for the given font. Possible values:\n -\"thin\"\n -\"extra-light\"\n -\"light\"\n -\"semi-light\"\n -\"normal\" (default)\n -\"medium\"\n -\"semi-bold\"\n -\"bold\"\n -\"extra-bold\"\n -\"black\"\n -\"extra-black\" or the corresponding numeric representation of OpenType font weight.",
+          "description": "Sets the weight (lightness or heaviness of the strokes) for the given font. Possible values:\n -\"thin\"\n -\"extra-light\"\n -\"light\"\n -\"semi-light\"\n -\"normal\" (default)\n -\"medium\"\n -\"semi-bold\"\n -\"bold\"\n -\"extra-bold\"\n -\"black\"\n -\"extra-black\"\n or the corresponding numeric representation of OpenType font weight.",
           "oneOf": [
             {
               "enum": [
@@ -607,10 +1294,7 @@
           "minimum": -1,
           "type": "integer"
         },
-        "icon": {
-          "description": "Image file location of the icon used in the profile. Displays within the tab and the dropdown menu.",
-          "type": ["string", "null"]
-        },
+        "icon":{ "$ref": "#/definitions/Icon" },
         "name": {
           "description": "Name of the profile. Displays in the dropdown menu.",
           "minLength": 1,
@@ -619,8 +1303,15 @@
         "padding": {
           "default": "8, 8, 8, 8",
           "description": "Sets the padding around the text within the window. Can have three different formats:\n -\"#\" sets the same padding for all sides \n -\"#, #\" sets the same padding for left-right and top-bottom\n -\"#, #, #, #\" sets the padding individually for left, top, right, and bottom.",
-          "pattern": "^-?[0-9]+(\\.[0-9]+)?( *, *-?[0-9]+(\\.[0-9]+)?|( *, *-?[0-9]+(\\.[0-9]+)?){3})?$",
-          "type": "string"
+          "oneOf": [
+            {
+              "pattern": "^-?[0-9]+(\\.[0-9]+)?( *, *-?[0-9]+(\\.[0-9]+)?|( *, *-?[0-9]+(\\.[0-9]+)?){3})?$",
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            }
+          ]
         },
         "scrollbarState": {
           "default": "visible",
@@ -660,6 +1351,11 @@
           "description": "When set to true, tabTitle overrides the default title of the tab and any title change messages from the application will be suppressed. When set to false, tabTitle behaves as normal.",
           "type": "boolean",
           "default": false
+        },
+        "tabColor": {
+          "$ref": "#/definitions/Color",
+          "description": "Sets the color of the profile's tab. Using the tab color picker will override this color.",
+          "type": ["string", "null"]
         },
         "tabTitle": {
           "description": "If set, will replace the name as the title to pass to the shell on startup. Some shells (like bash) may choose to ignore this initial value, while others (cmd, powershell) may use this value over the lifetime of the application.",

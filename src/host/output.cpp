@@ -41,7 +41,7 @@ using namespace Microsoft::Console::Interactivity;
     NTSTATUS Status = SCREEN_INFORMATION::CreateInstance(gci.GetWindowSize(),
                                                          fiFont,
                                                          gci.GetScreenBufferSize(),
-                                                         gci.GetDefaultAttributes(),
+                                                         TextAttribute{},
                                                          TextAttribute{ gci.GetPopupFillAttribute() },
                                                          gci.GetCursorSize(),
                                                          &gci.ScreenBuffers);
@@ -148,8 +148,7 @@ std::vector<WORD> ReadOutputAttributes(const SCREEN_INFORMATION& screenInfo,
     // While we haven't read enough cells yet and the iterator is still valid (hasn't reached end of buffer)
     while (amountRead < amountToRead && it)
     {
-        const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-        const auto legacyAttributes = gci.GenerateLegacyAttributes(it->TextAttr());
+        const auto legacyAttributes = it->TextAttr().GetLegacyAttributes();
 
         // If the first thing we read is trailing, pad with a space.
         // OR If the last thing we read is leading, pad with a space.
@@ -452,6 +451,13 @@ void ScrollRegion(SCREEN_INFORMATION& screenInfo,
     {
         const auto& view = remaining.at(i);
         screenInfo.WriteRect(fillData, view);
+
+        // If we're scrolling an area that encompasses the full buffer width,
+        // then the filled rows should also have their line rendition reset.
+        if (view.Width() == buffer.Width() && destinationOriginGiven.X == 0)
+        {
+            screenInfo.GetTextBuffer().ResetLineRenditionRange(view.Top(), view.BottomExclusive());
+        }
     }
 }
 

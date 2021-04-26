@@ -2,20 +2,20 @@
 // Licensed under the MIT license.
 
 #include <windows.h>
-#include <wil\Common.h>
-#include <wil\result.h>
-#include <wil\resource.h>
-#include <wil\wistd_functional.h>
-#include <wil\wistd_memory.h>
-#include <stdlib.h> /* srand, rand */
-#include <time.h> /* time */
+#include <wil/Common.h>
+#include <wil/result.h>
+#include <wil/resource.h>
+#include <wil/wistd_functional.h>
+#include <wil/wistd_memory.h>
+#include <cstdlib> /* srand, rand */
+#include <ctime> /* time */
 
 #include <deque>
 #include <memory>
 #include <vector>
 #include <string>
 #include <sstream>
-#include <assert.h>
+#include <cassert>
 
 using namespace std;
 ////////////////////////////////////////////////////////////////////////////////

@@ -4,6 +4,7 @@
 #include "precomp.h"
 
 #include "CustomTextLayout.h"
+#include "CustomTextRenderer.h"
 
 #include <wrl.h>
 #include <wrl/client.h>
@@ -16,39 +17,58 @@ using namespace Microsoft::Console::Render;
 // Routine Description:
 // - Creates a CustomTextLayout object for calculating which glyphs should be placed and where
 // Arguments:
-// - factory - DirectWrite factory reference in case we need other DirectWrite objects for our layout
-// - analyzer - DirectWrite text analyzer from the factory that has been cached at a level above this layout (expensive to create)
-// - format - The DirectWrite format object representing the size and other text properties to be applied (by default) to a layout
-// - font - The DirectWrite font face to use while calculating layout (by default, will fallback if necessary)
-// - clusters - From the backing buffer, the text to be displayed clustered by the columns it should consume.
-// - width - The count of pixels available per column (the expected pixel width of every column)
-// - boxEffect - Box drawing scaling effects that are cached for the base font across layouts.
-CustomTextLayout::CustomTextLayout(gsl::not_null<IDWriteFactory1*> const factory,
-                                   gsl::not_null<IDWriteTextAnalyzer1*> const analyzer,
-                                   gsl::not_null<IDWriteTextFormat*> const format,
-                                   gsl::not_null<IDWriteFontFace1*> const font,
-                                   std::basic_string_view<Cluster> const clusters,
-                                   size_t const width,
-                                   IBoxDrawingEffect* const boxEffect) :
-    _factory{ factory.get() },
-    _analyzer{ analyzer.get() },
-    _format{ format.get() },
-    _font{ font.get() },
-    _boxDrawingEffect{ boxEffect },
-    _localeName{},
+// - dxFontRenderData - The DirectWrite font render data for our layout
+CustomTextLayout::CustomTextLayout(gsl::not_null<DxFontRenderData*> const fontRenderData) :
+    _fontRenderData{ fontRenderData },
+    _formatInUse{ fontRenderData->DefaultTextFormat().Get() },
+    _fontInUse{ fontRenderData->DefaultFontFace().Get() },
     _numberSubstitution{},
     _readingDirection{ DWRITE_READING_DIRECTION_LEFT_TO_RIGHT },
     _runs{},
     _breakpoints{},
     _runIndex{ 0 },
-    _width{ width },
+    _width{ gsl::narrow_cast<size_t>(fontRenderData->GlyphCell().width()) },
     _isEntireTextSimple{ false }
 {
-    // Fetch the locale name out once now from the format
-    _localeName.resize(gsl::narrow_cast<size_t>(format->GetLocaleNameLength()) + 1); // +1 for null
-    THROW_IF_FAILED(format->GetLocaleName(_localeName.data(), gsl::narrow<UINT32>(_localeName.size())));
+    _localeName.resize(gsl::narrow_cast<size_t>(fontRenderData->DefaultTextFormat()->GetLocaleNameLength()) + 1); // +1 for null
+    THROW_IF_FAILED(fontRenderData->DefaultTextFormat()->GetLocaleName(_localeName.data(), gsl::narrow<UINT32>(_localeName.size())));
+}
 
-    _textClusterColumns.reserve(clusters.size());
+//Routine Description:
+// - Resets this custom text layout to the freshly allocated state in terms of text analysis.
+// Arguments:
+// - <none>, modifies internal state
+// Return Value:
+// - S_OK or suitable memory management issue
+[[nodiscard]] HRESULT STDMETHODCALLTYPE CustomTextLayout::Reset() noexcept
+try
+{
+    _runs.clear();
+    _breakpoints.clear();
+    _runIndex = 0;
+    _isEntireTextSimple = false;
+    _textClusterColumns.clear();
+    _text.clear();
+    _glyphScaleCorrections.clear();
+    _glyphClusters.clear();
+    _glyphIndices.clear();
+    _glyphDesignUnitAdvances.clear();
+    _glyphAdvances.clear();
+    _glyphOffsets.clear();
+    return S_OK;
+}
+CATCH_RETURN()
+
+// Routine Description:
+// - Appends text to this layout for analysis/processing.
+// Arguments:
+// - clusters - From the backing buffer, the text to be displayed clustered by the columns it should consume.
+// Return Value:
+// - S_OK or suitable memory management issue.
+[[nodiscard]] HRESULT STDMETHODCALLTYPE CustomTextLayout::AppendClusters(const gsl::span<const ::Microsoft::Console::Render::Cluster> clusters)
+try
+{
+    _textClusterColumns.reserve(_textClusterColumns.size() + clusters.size());
 
     for (const auto& cluster : clusters)
     {
@@ -64,7 +84,10 @@ CustomTextLayout::CustomTextLayout(gsl::not_null<IDWriteFactory1*> const factory
 
         _text += text;
     }
+
+    return S_OK;
 }
+CATCH_RETURN()
 
 // Routine Description:
 // - Figures out how many columns this layout should take. This will use the analyze step only.
@@ -76,6 +99,9 @@ CustomTextLayout::CustomTextLayout(gsl::not_null<IDWriteFactory1*> const factory
 {
     RETURN_HR_IF_NULL(E_INVALIDARG, columns);
     *columns = 0;
+
+    _formatInUse = _fontRenderData->DefaultTextFormat().Get();
+    _fontInUse = _fontRenderData->DefaultFontFace().Get();
 
     RETURN_IF_FAILED(_AnalyzeTextComplexity());
     RETURN_IF_FAILED(_AnalyzeRuns());
@@ -108,6 +134,10 @@ CustomTextLayout::CustomTextLayout(gsl::not_null<IDWriteFactory1*> const factory
                                                                FLOAT originX,
                                                                FLOAT originY) noexcept
 {
+    const auto drawingContext = static_cast<const DrawingContext*>(clientDrawingContext);
+    _formatInUse = drawingContext->useItalicFont ? _fontRenderData->ItalicTextFormat().Get() : _fontRenderData->DefaultTextFormat().Get();
+    _fontInUse = drawingContext->useItalicFont ? _fontRenderData->ItalicFontFace().Get() : _fontRenderData->DefaultFontFace().Get();
+
     RETURN_IF_FAILED(_AnalyzeTextComplexity());
     RETURN_IF_FAILED(_AnalyzeRuns());
     RETURN_IF_FAILED(_ShapeGlyphRuns());
@@ -144,10 +174,10 @@ CustomTextLayout::CustomTextLayout(gsl::not_null<IDWriteFactory1*> const factory
 
         _glyphIndices.resize(textLength);
 
-        const HRESULT hr = _analyzer->GetTextComplexity(
+        const HRESULT hr = _fontRenderData->Analyzer()->GetTextComplexity(
             _text.c_str(),
             textLength,
-            _font.Get(),
+            _fontInUse,
             &isTextSimple,
             &uiLengthRead,
             &_glyphIndices.at(glyphStart));
@@ -182,8 +212,6 @@ CustomTextLayout::CustomTextLayout(gsl::not_null<IDWriteFactory1*> const factory
         // This result will be subdivided by the analysis processes.
         _runs.resize(1);
         auto& initialRun = _runs.front();
-        initialRun.nextRunIndex = 0;
-        initialRun.textStart = 0;
         initialRun.textLength = textLength;
         initialRun.bidiLevel = (_readingDirection == DWRITE_READING_DIRECTION_RIGHT_TO_LEFT);
 
@@ -193,10 +221,10 @@ CustomTextLayout::CustomTextLayout(gsl::not_null<IDWriteFactory1*> const factory
         if (!_isEntireTextSimple)
         {
             // Call each of the analyzers in sequence, recording their results.
-            RETURN_IF_FAILED(_analyzer->AnalyzeLineBreakpoints(this, 0, textLength, this));
-            RETURN_IF_FAILED(_analyzer->AnalyzeBidi(this, 0, textLength, this));
-            RETURN_IF_FAILED(_analyzer->AnalyzeScript(this, 0, textLength, this));
-            RETURN_IF_FAILED(_analyzer->AnalyzeNumberSubstitution(this, 0, textLength, this));
+            RETURN_IF_FAILED(_fontRenderData->Analyzer()->AnalyzeLineBreakpoints(this, 0, textLength, this));
+            RETURN_IF_FAILED(_fontRenderData->Analyzer()->AnalyzeBidi(this, 0, textLength, this));
+            RETURN_IF_FAILED(_fontRenderData->Analyzer()->AnalyzeScript(this, 0, textLength, this));
+            RETURN_IF_FAILED(_fontRenderData->Analyzer()->AnalyzeNumberSubstitution(this, 0, textLength, this));
             // Perform our custom font fallback analyzer that mimics the pattern of the real analyzers.
             RETURN_IF_FAILED(_AnalyzeFontFallback(this, 0, textLength));
         }
@@ -206,7 +234,7 @@ CustomTextLayout::CustomTextLayout(gsl::not_null<IDWriteFactory1*> const factory
         {
             if (!run.fontFace)
             {
-                run.fontFace = _font;
+                run.fontFace = _fontInUse;
             }
         }
 
@@ -323,11 +351,10 @@ CustomTextLayout::CustomTextLayout(gsl::not_null<IDWriteFactory1*> const factory
             // With simple text, there's only one run. The actual glyph count is the same as textLength.
             _glyphDesignUnitAdvances.resize(textLength);
             _glyphAdvances.resize(textLength);
-            _glyphOffsets.resize(textLength);
 
             USHORT designUnitsPerEm = metrics.designUnitsPerEm;
 
-            RETURN_IF_FAILED(_font->GetDesignGlyphAdvances(
+            RETURN_IF_FAILED(_fontInUse->GetDesignGlyphAdvances(
                 textLength,
                 &_glyphIndices.at(glyphStart),
                 &_glyphDesignUnitAdvances.at(glyphStart),
@@ -335,8 +362,12 @@ CustomTextLayout::CustomTextLayout(gsl::not_null<IDWriteFactory1*> const factory
 
             for (size_t i = glyphStart; i < _glyphAdvances.size(); i++)
             {
-                _glyphAdvances.at(i) = (float)_glyphDesignUnitAdvances.at(i) / designUnitsPerEm * _format->GetFontSize() * run.fontScale;
+                _glyphAdvances.at(i) = (float)_glyphDesignUnitAdvances.at(i) / designUnitsPerEm * _formatInUse->GetFontSize() * run.fontScale;
             }
+
+            // Set all the clusters as sequential. In a simple run, we're going 1 to 1.
+            // Fill the clusters sequentially from 0 to N-1.
+            std::iota(_glyphClusters.begin(), _glyphClusters.end(), gsl::narrow_cast<unsigned short>(0));
 
             run.glyphCount = textLength;
             glyphStart += textLength;
@@ -354,7 +385,7 @@ CustomTextLayout::CustomTextLayout(gsl::not_null<IDWriteFactory1*> const factory
         HRESULT hr = S_OK;
         do
         {
-            hr = _analyzer->GetGlyphs(
+            hr = _fontRenderData->Analyzer()->GetGlyphs(
                 &_text.at(textStart),
                 textLength,
                 run.fontFace.Get(),
@@ -396,10 +427,10 @@ CustomTextLayout::CustomTextLayout(gsl::not_null<IDWriteFactory1*> const factory
         _glyphAdvances.resize(std::max(gsl::narrow_cast<size_t>(glyphStart) + gsl::narrow_cast<size_t>(actualGlyphCount), _glyphAdvances.size()));
         _glyphOffsets.resize(std::max(gsl::narrow_cast<size_t>(glyphStart) + gsl::narrow_cast<size_t>(actualGlyphCount), _glyphOffsets.size()));
 
-        const auto fontSizeFormat = _format->GetFontSize();
+        const auto fontSizeFormat = _formatInUse->GetFontSize();
         const auto fontSize = fontSizeFormat * run.fontScale;
 
-        hr = _analyzer->GetGlyphPlacements(
+        hr = _fontRenderData->Analyzer()->GetGlyphPlacements(
             &_text.at(textStart),
             &_glyphClusters.at(textStart),
             &textProps.at(0),
@@ -560,6 +591,10 @@ CustomTextLayout::CustomTextLayout(gsl::not_null<IDWriteFactory1*> const factory
             //  1     1    .8 1  1
         }
 
+        // Dump the glyph scale corrections now that we're done with them.
+        _glyphScaleCorrections.clear();
+
+        // Order the runs.
         _OrderRuns();
     }
     CATCH_RETURN();
@@ -806,57 +841,113 @@ CATCH_RETURN();
         auto mutableOrigin = origin;
 
         // Draw each run separately.
-        for (UINT32 runIndex = 0; runIndex < _runs.size(); ++runIndex)
+        for (INT32 runIndex = 0; runIndex < gsl::narrow<INT32>(_runs.size()); ++runIndex)
         {
             // Get the run
             const Run& run = _runs.at(runIndex);
 
-            // Prepare the glyph run and description objects by converting our
-            // internal storage representation into something that matches DWrite's structures.
-            DWRITE_GLYPH_RUN glyphRun;
-            glyphRun.bidiLevel = run.bidiLevel;
-            glyphRun.fontEmSize = _format->GetFontSize() * run.fontScale;
-            glyphRun.fontFace = run.fontFace.Get();
-            glyphRun.glyphAdvances = &_glyphAdvances.at(run.glyphStart);
-            glyphRun.glyphCount = run.glyphCount;
-            glyphRun.glyphIndices = &_glyphIndices.at(run.glyphStart);
-            glyphRun.glyphOffsets = &_glyphOffsets.at(run.glyphStart);
-            glyphRun.isSideways = false;
-
-            DWRITE_GLYPH_RUN_DESCRIPTION glyphRunDescription;
-            glyphRunDescription.clusterMap = _glyphClusters.data();
-            glyphRunDescription.localeName = _localeName.data();
-            glyphRunDescription.string = _text.data();
-            glyphRunDescription.stringLength = run.textLength;
-            glyphRunDescription.textPosition = run.textStart;
-
-            // Calculate the origin for the next run based on the amount of space
-            // that would be consumed. We are doing this calculation now, not after,
-            // because if the text is RTL then we need to advance immediately, before the
-            // write call since DirectX expects the origin to the RIGHT of the text for RTL.
-            const auto postOriginX = std::accumulate(_glyphAdvances.begin() + run.glyphStart,
-                                                     _glyphAdvances.begin() + run.glyphStart + run.glyphCount,
-                                                     mutableOrigin.x);
-
-            // Check for RTL, if it is, apply space adjustment.
-            if (WI_IsFlagSet(glyphRun.bidiLevel, 1))
+            if (!WI_IsFlagSet(run.bidiLevel, 1))
             {
-                mutableOrigin.x = postOriginX;
+                RETURN_IF_FAILED(_DrawGlyphRun(clientDrawingContext, renderer, mutableOrigin, run));
             }
+            // This is the RTL behavior. We will advance to the last contiguous RTL run, draw that,
+            // and then keep on going backwards from there, and then move runIndex beyond.
+            // Let's say we have runs abcdEFGh, where runs EFG are RTL.
+            // Then we will draw them in the order abcdGFEh
+            else
+            {
+                const INT32 originalRunIndex = runIndex;
+                INT32 lastIndexRTL = runIndex;
 
-            // Try to draw it
-            RETURN_IF_FAILED(renderer->DrawGlyphRun(clientDrawingContext,
-                                                    mutableOrigin.x,
-                                                    mutableOrigin.y,
-                                                    DWRITE_MEASURING_MODE_NATURAL,
-                                                    &glyphRun,
-                                                    &glyphRunDescription,
-                                                    run.drawingEffect.Get()));
+                // Step 1: Get to the last contiguous RTL run from here
+                while (lastIndexRTL < gsl::narrow<INT32>(_runs.size()) - 1) // only could ever advance if there's something left
+                {
+                    const Run& nextRun = _runs.at(gsl::narrow_cast<size_t>(lastIndexRTL + 1));
+                    if (WI_IsFlagSet(nextRun.bidiLevel, 1))
+                    {
+                        lastIndexRTL++;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
 
-            // Either way, we should be at this point by the end of writing this sequence,
-            // whether it was LTR or RTL.
+                // Go from the last to the first and draw
+                for (runIndex = lastIndexRTL; runIndex >= originalRunIndex; runIndex--)
+                {
+                    const Run& currentRun = _runs.at(runIndex);
+                    RETURN_IF_FAILED(_DrawGlyphRun(clientDrawingContext, renderer, mutableOrigin, currentRun));
+                }
+                runIndex = lastIndexRTL; // and the for loop will take the increment to the last one
+            }
+        }
+    }
+    CATCH_RETURN();
+    return S_OK;
+}
+
+// Routine Description:
+// - Draw the given run
+// - The origin is updated to be after the run.
+// Arguments:
+// - clientDrawingContext - Optional pointer to information that the renderer might need
+//                          while attempting to graphically place the text onto the screen
+// - renderer - The interface to be used for actually putting text onto the screen
+// - origin - pixel point of top left corner on final surface for drawing
+// - run - the run to be drawn
+[[nodiscard]] HRESULT CustomTextLayout::_DrawGlyphRun(_In_opt_ void* clientDrawingContext,
+                                                      gsl::not_null<IDWriteTextRenderer*> renderer,
+                                                      D2D_POINT_2F& mutableOrigin,
+                                                      const Run& run) noexcept
+{
+    try
+    {
+        // Prepare the glyph run and description objects by converting our
+        // internal storage representation into something that matches DWrite's structures.
+        DWRITE_GLYPH_RUN glyphRun;
+        glyphRun.bidiLevel = run.bidiLevel;
+        glyphRun.fontEmSize = _formatInUse->GetFontSize() * run.fontScale;
+        glyphRun.fontFace = run.fontFace.Get();
+        glyphRun.glyphAdvances = &_glyphAdvances.at(run.glyphStart);
+        glyphRun.glyphCount = run.glyphCount;
+        glyphRun.glyphIndices = &_glyphIndices.at(run.glyphStart);
+        glyphRun.glyphOffsets = &_glyphOffsets.at(run.glyphStart);
+        glyphRun.isSideways = false;
+
+        DWRITE_GLYPH_RUN_DESCRIPTION glyphRunDescription;
+        glyphRunDescription.clusterMap = _glyphClusters.data();
+        glyphRunDescription.localeName = _localeName.data();
+        glyphRunDescription.string = _text.data();
+        glyphRunDescription.stringLength = run.textLength;
+        glyphRunDescription.textPosition = run.textStart;
+
+        // Calculate the origin for the next run based on the amount of space
+        // that would be consumed. We are doing this calculation now, not after,
+        // because if the text is RTL then we need to advance immediately, before the
+        // write call since DirectX expects the origin to the RIGHT of the text for RTL.
+        const auto postOriginX = std::accumulate(_glyphAdvances.begin() + run.glyphStart,
+                                                 _glyphAdvances.begin() + run.glyphStart + run.glyphCount,
+                                                 mutableOrigin.x);
+
+        // Check for RTL, if it is, apply space adjustment.
+        if (WI_IsFlagSet(glyphRun.bidiLevel, 1))
+        {
             mutableOrigin.x = postOriginX;
         }
+
+        // Try to draw it
+        RETURN_IF_FAILED(renderer->DrawGlyphRun(clientDrawingContext,
+                                                mutableOrigin.x,
+                                                mutableOrigin.y,
+                                                DWRITE_MEASURING_MODE_NATURAL,
+                                                &glyphRun,
+                                                &glyphRunDescription,
+                                                run.drawingEffect.Get()));
+
+        // Either way, we should be at this point by the end of writing this sequence,
+        // whether it was LTR or RTL.
+        mutableOrigin.x = postOriginX;
     }
     CATCH_RETURN();
     return S_OK;
@@ -1129,7 +1220,7 @@ CATCH_RETURN();
     {
         // Get the font fallback first
         ::Microsoft::WRL::ComPtr<IDWriteTextFormat1> format1;
-        if (FAILED(_format.As(&format1)))
+        if (FAILED(_formatInUse->QueryInterface(IID_PPV_ARGS(&format1))))
         {
             // If IDWriteTextFormat1 does not exist, return directly as this OS version doesn't have font fallback.
             return S_FALSE;
@@ -1152,9 +1243,7 @@ CATCH_RETURN();
 
         if (!fallback)
         {
-            ::Microsoft::WRL::ComPtr<IDWriteFactory2> factory2;
-            RETURN_IF_FAILED(_factory.As(&factory2));
-            factory2->GetSystemFontFallback(&fallback);
+            fallback = _fontRenderData->SystemFontFallback();
         }
 
         // Walk through and analyze the entire string
@@ -1221,7 +1310,7 @@ CATCH_RETURN();
             }
             else
             {
-                run.fontFace = _font;
+                run.fontFace = _fontInUse;
             }
 
             // Store the font scale as well.
@@ -1354,14 +1443,14 @@ try
     {
         auto& run = _FetchNextRun(textLength);
 
-        if (run.fontFace == _font)
+        if (run.fontFace == _fontRenderData->DefaultFontFace())
         {
-            run.drawingEffect = _boxDrawingEffect;
+            run.drawingEffect = _fontRenderData->DefaultBoxDrawingEffect();
         }
         else
         {
             ::Microsoft::WRL::ComPtr<IBoxDrawingEffect> eff;
-            RETURN_IF_FAILED(s_CalculateBoxEffect(_format.Get(), _width, run.fontFace.Get(), run.fontScale, &eff));
+            RETURN_IF_FAILED(DxFontRenderData::s_CalculateBoxEffect(_formatInUse, _width, run.fontFace.Get(), run.fontScale, &eff));
 
             // store data in the run
             run.drawingEffect = std::move(eff);
@@ -1371,247 +1460,6 @@ try
     return S_OK;
 }
 CATCH_RETURN();
-
-// Routine Description:
-// - Calculates the box drawing scale/translate matrix values to fit a box glyph into the cell as perfectly as possible.
-// Arguments:
-// - format - Text format used to determine line spacing (height including ascent & descent) as calculated from the base font.
-// - widthPixels - The pixel width of the available cell.
-// - face - The font face that is currently being used, may differ from the base font from the layout.
-// - fontScale -  if the given font face is going to be scaled versus the format, we need to know so we can compensate for that. pass 1.0f for no scaling.
-// - effect - Receives the effect to apply to box drawing characters. If no effect is received, special treatment isn't required.
-// Return Value:
-// - S_OK, GSL/WIL errors, DirectWrite errors, or math errors.
-[[nodiscard]] HRESULT STDMETHODCALLTYPE CustomTextLayout::s_CalculateBoxEffect(IDWriteTextFormat* format, size_t widthPixels, IDWriteFontFace1* face, float fontScale, IBoxDrawingEffect** effect) noexcept
-try
-{
-    // Check for bad in parameters.
-    RETURN_HR_IF(E_INVALIDARG, !format);
-    RETURN_HR_IF(E_INVALIDARG, !face);
-
-    // Check the out parameter and fill it up with null.
-    RETURN_HR_IF(E_INVALIDARG, !effect);
-    *effect = nullptr;
-
-    // The format is based around the main font that was specified by the user.
-    // We need to know its size as well as the final spacing that was calculated around
-    // it when it was first selected to get an idea of how large the bounding box is.
-    const auto fontSize = format->GetFontSize();
-
-    DWRITE_LINE_SPACING_METHOD spacingMethod;
-    float lineSpacing; // total height of the cells
-    float baseline; // vertical position counted down from the top where the characters "sit"
-    RETURN_IF_FAILED(format->GetLineSpacing(&spacingMethod, &lineSpacing, &baseline));
-
-    const float ascentPixels = baseline;
-    const float descentPixels = lineSpacing - baseline;
-
-    // We need this for the designUnitsPerEm which will be required to move back and forth between
-    // Design Units and Pixels. I'll elaborate below.
-    DWRITE_FONT_METRICS1 fontMetrics;
-    face->GetMetrics(&fontMetrics);
-
-    // If we had font fallback occur, the size of the font given to us (IDWriteFontFace1) can be different
-    // than the font size used for the original format (IDWriteTextFormat).
-    const auto scaledFontSize = fontScale * fontSize;
-
-    // This is Unicode FULL BLOCK U+2588.
-    // We presume that FULL BLOCK should be filling its entire cell in all directions so it should provide a good basis
-    // in knowing exactly where to touch every single edge.
-    // We're also presuming that the other box/line drawing glyphs were authored in this font to perfectly inscribe
-    // inside of FULL BLOCK, with the same left/top/right/bottom bearings so they would look great when drawn adjacent.
-    const UINT32 blockCodepoint = L'\x2588';
-
-    // Get the index of the block out of the font.
-    UINT16 glyphIndex;
-    RETURN_IF_FAILED(face->GetGlyphIndicesW(&blockCodepoint, 1, &glyphIndex));
-
-    // If it was 0, it wasn't found in the font. We're going to try again with
-    // Unicode BOX DRAWINGS LIGHT VERTICAL AND HORIZONTAL U+253C which should be touching
-    // all the edges of the possible rectangle, much like a full block should.
-    if (glyphIndex == 0)
-    {
-        const UINT32 alternateCp = L'\x253C';
-        RETURN_IF_FAILED(face->GetGlyphIndicesW(&alternateCp, 1, &glyphIndex));
-    }
-
-    // If we still didn't find the glyph index, we haven't implemented any further logic to figure out the box dimensions.
-    // So we're just going to leave successfully as is and apply no scaling factor. It might look not-right, but it won't
-    // stop the rendering pipeline.
-    RETURN_HR_IF(S_FALSE, glyphIndex == 0);
-
-    // Get the metrics of the given glyph, which we're going to treat as the outline box in which all line/block drawing
-    // glyphs will be inscribed within, perfectly touching each edge as to align when two cells meet.
-    DWRITE_GLYPH_METRICS boxMetrics = { 0 };
-    RETURN_IF_FAILED(face->GetDesignGlyphMetrics(&glyphIndex, 1, &boxMetrics));
-
-    // NOTE: All metrics we receive from DWRITE are going to be in "design units" which are a somewhat agnostic
-    //       way of describing proportions.
-    //       Converting back and forth between real pixels and design units is possible using
-    //       any font's specific fontSize and the designUnitsPerEm FONT_METRIC value.
-    //
-    // Here's what to know about the boxMetrics:
-    //
-    //
-    //
-    //   topLeft --> +--------------------------------+    ---
-    //               |         ^                      |     |
-    //               |         |  topSide             |     |
-    //               |         |  Bearing             |     |
-    //               |         v                      |     |
-    //               |      +-----------------+       |     |
-    //               |      |                 |       |     |
-    //               |      |                 |       |     | a
-    //               |      |                 |       |     | d
-    //               |      |                 |       |     | v
-    //               +<---->+                 |       |     | a
-    //               |      |                 |       |     | n
-    //               | left |                 |       |     | c
-    //               | Side |                 |       |     | e
-    //               | Bea- |                 |       |     | H
-    //               | ring |                 | right |     | e
-    //  vertical     |      |                 | Side  |     | i
-    //  OriginY -->  x      |                 | Bea-  |     | g
-    //               |      |                 | ring  |     | h
-    //               |      |                 |       |     | t
-    //               |      |                 +<----->+     |
-    //               |      +-----------------+       |     |
-    //               |                     ^          |     |
-    //               |       bottomSide    |          |     |
-    //               |          Bearing    |          |     |
-    //               |                     v          |     |
-    //               +--------------------------------+    ---
-    //
-    //
-    //               |                                |
-    //               +--------------------------------+
-    //               |         advanceWidth           |
-    //
-    //
-    // NOTE: The bearings can be negative, in which case it is specifying that the glyphs overhang the box
-    // as defined by the advanceHeight/width.
-    // See also: https://docs.microsoft.com/en-us/windows/win32/api/dwrite/ns-dwrite-dwrite_glyph_metrics
-
-    // The scale is a multiplier and the translation is addition. So *1 and +0 will mean nothing happens.
-    const float defaultBoxVerticalScaleFactor = 1.0f;
-    float boxVerticalScaleFactor = defaultBoxVerticalScaleFactor;
-    const float defaultBoxVerticalTranslation = 0.0f;
-    float boxVerticalTranslation = defaultBoxVerticalTranslation;
-    {
-        // First, find the dimensions of the glyph representing our fully filled box.
-
-        // Ascent is how far up from the baseline we'll draw.
-        // verticalOriginY is the measure from the topLeft corner of the bounding box down to where
-        // the glyph's version of the baseline is.
-        // topSideBearing is how much "gap space" is left between that topLeft and where the glyph
-        // starts drawing. Subtract the gap space to find how far is drawn upward from baseline.
-        const auto boxAscentDesignUnits = boxMetrics.verticalOriginY - boxMetrics.topSideBearing;
-
-        // Descent is how far down from the baseline we'll draw.
-        // advanceHeight is the total height of the drawn bounding box.
-        // verticalOriginY is how much was given to the ascent, so subtract that out.
-        // What remains is then the descent value. Remove the
-        // bottomSideBearing as the "gap space" on the bottom to find how far is drawn downward from baseline.
-        const auto boxDescentDesignUnits = boxMetrics.advanceHeight - boxMetrics.verticalOriginY - boxMetrics.bottomSideBearing;
-
-        // The height, then, of the entire box is just the sum of the ascent above the baseline and the descent below.
-        const auto boxHeightDesignUnits = boxAscentDesignUnits + boxDescentDesignUnits;
-
-        // Second, find the dimensions of the cell we're going to attempt to fit within.
-        // We know about the exact ascent/descent units in pixels as calculated when we chose a font and
-        // adjusted the ascent/descent for a nice perfect baseline and integer total height.
-        // All we need to do is adapt it into Design Units so it meshes nicely with the Design Units above.
-        // Use the formula: Pixels * Design Units Per Em / Font Size = Design Units
-        const auto cellAscentDesignUnits = ascentPixels * fontMetrics.designUnitsPerEm / scaledFontSize;
-        const auto cellDescentDesignUnits = descentPixels * fontMetrics.designUnitsPerEm / scaledFontSize;
-        const auto cellHeightDesignUnits = cellAscentDesignUnits + cellDescentDesignUnits;
-
-        // OK, now do a few checks. If the drawn box touches the top and bottom of the cell
-        // and the box is overall tall enough, then we'll not bother adjusting.
-        // We will presume the font author has set things as they wish them to be.
-        const auto boxTouchesCellTop = boxAscentDesignUnits >= cellAscentDesignUnits;
-        const auto boxTouchesCellBottom = boxDescentDesignUnits >= cellDescentDesignUnits;
-        const auto boxIsTallEnoughForCell = boxHeightDesignUnits >= cellHeightDesignUnits;
-
-        // If not...
-        if (!(boxTouchesCellTop && boxTouchesCellBottom && boxIsTallEnoughForCell))
-        {
-            // Find a scaling factor that will make the total height drawn of this box
-            // perfectly fit the same number of design units as the cell.
-            // Since scale factor is a multiplier, it doesn't matter that this is design units.
-            // The fraction between the two heights in pixels should be exactly the same
-            // (which is what will matter when we go to actually render it... the pixels that is.)
-            // Don't scale below 1.0. If it'd shrink, just center it at the prescribed scale.
-            boxVerticalScaleFactor = std::max(cellHeightDesignUnits / boxHeightDesignUnits, 1.0f);
-
-            // The box as scaled might be hanging over the top or bottom of the cell (or both).
-            // We find out the amount of overhang/underhang on both the top and the bottom.
-            const auto extraAscent = boxAscentDesignUnits * boxVerticalScaleFactor - cellAscentDesignUnits;
-            const auto extraDescent = boxDescentDesignUnits * boxVerticalScaleFactor - cellDescentDesignUnits;
-
-            // This took a bit of time and effort and it's difficult to put into words, but here goes.
-            // We want the average of the two magnitudes to find out how much to "take" from one and "give"
-            // to the other such that both are equal. We presume the glyphs are designed to be drawn
-            // centered in their box vertically to look good.
-            // The ordering around subtraction is required to ensure that the direction is correct with a negative
-            // translation moving up (taking excess descent and adding to ascent) and positive is the opposite.
-            const auto boxVerticalTranslationDesignUnits = (extraAscent - extraDescent) / 2;
-
-            // The translation is just a raw movement of pixels up or down. Since we were working in Design Units,
-            // we need to run the opposite algorithm shown above to go from Design Units to Pixels.
-            boxVerticalTranslation = boxVerticalTranslationDesignUnits * scaledFontSize / fontMetrics.designUnitsPerEm;
-        }
-    }
-
-    // The horizontal adjustments follow the exact same logic as the vertical ones.
-    const float defaultBoxHorizontalScaleFactor = 1.0f;
-    float boxHorizontalScaleFactor = defaultBoxHorizontalScaleFactor;
-    const float defaultBoxHorizontalTranslation = 0.0f;
-    float boxHorizontalTranslation = defaultBoxHorizontalTranslation;
-    {
-        // This is the only difference. We don't have a horizontalOriginX from the metrics.
-        // However, https://docs.microsoft.com/en-us/windows/win32/api/dwrite/ns-dwrite-dwrite_glyph_metrics says
-        // the X coordinate is specified by half the advanceWidth to the right of the horizontalOrigin.
-        // So we'll use that as the "center" and apply it the role that verticalOriginY had above.
-
-        const auto boxCenterDesignUnits = boxMetrics.advanceWidth / 2;
-        const auto boxLeftDesignUnits = boxCenterDesignUnits - boxMetrics.leftSideBearing;
-        const auto boxRightDesignUnits = boxMetrics.advanceWidth - boxMetrics.rightSideBearing - boxCenterDesignUnits;
-        const auto boxWidthDesignUnits = boxLeftDesignUnits + boxRightDesignUnits;
-
-        const auto cellWidthDesignUnits = widthPixels * fontMetrics.designUnitsPerEm / scaledFontSize;
-        const auto cellLeftDesignUnits = cellWidthDesignUnits / 2;
-        const auto cellRightDesignUnits = cellLeftDesignUnits;
-
-        const auto boxTouchesCellLeft = boxLeftDesignUnits >= cellLeftDesignUnits;
-        const auto boxTouchesCellRight = boxRightDesignUnits >= cellRightDesignUnits;
-        const auto boxIsWideEnoughForCell = boxWidthDesignUnits >= cellWidthDesignUnits;
-
-        if (!(boxTouchesCellLeft && boxTouchesCellRight && boxIsWideEnoughForCell))
-        {
-            boxHorizontalScaleFactor = std::max(cellWidthDesignUnits / boxWidthDesignUnits, 1.0f);
-            const auto extraLeft = boxLeftDesignUnits * boxHorizontalScaleFactor - cellLeftDesignUnits;
-            const auto extraRight = boxRightDesignUnits * boxHorizontalScaleFactor - cellRightDesignUnits;
-
-            const auto boxHorizontalTranslationDesignUnits = (extraLeft - extraRight) / 2;
-
-            boxHorizontalTranslation = boxHorizontalTranslationDesignUnits * scaledFontSize / fontMetrics.designUnitsPerEm;
-        }
-    }
-
-    // If we set anything, make a drawing effect. Otherwise, there isn't one.
-    if (defaultBoxVerticalScaleFactor != boxVerticalScaleFactor ||
-        defaultBoxVerticalTranslation != boxVerticalTranslation ||
-        defaultBoxHorizontalScaleFactor != boxHorizontalScaleFactor ||
-        defaultBoxHorizontalTranslation != boxHorizontalTranslation)
-    {
-        // OK, make the object that will represent our effect, stuff the metrics into it, and return it.
-        RETURN_IF_FAILED(WRL::MakeAndInitialize<BoxDrawingEffect>(effect, boxVerticalScaleFactor, boxVerticalTranslation, boxHorizontalScaleFactor, boxHorizontalTranslation));
-    }
-
-    return S_OK;
-}
-CATCH_RETURN()
 
 #pragma endregion
 
@@ -1827,21 +1675,13 @@ void CustomTextLayout::_SplitCurrentRun(const UINT32 splitPosition)
 // - <none>
 void CustomTextLayout::_OrderRuns()
 {
-    const size_t totalRuns = _runs.size();
-    std::vector<LinkedRun> runs;
-    runs.resize(totalRuns);
-
-    UINT32 nextRunIndex = 0;
-    for (UINT32 i = 0; i < totalRuns; ++i)
+    std::sort(_runs.begin(), _runs.end(), [](auto& a, auto& b) { return a.textStart < b.textStart; });
+    for (UINT32 i = 0; i < _runs.size() - 1; ++i)
     {
-        runs.at(i) = _runs.at(nextRunIndex);
-        runs.at(i).nextRunIndex = i + 1;
-        nextRunIndex = _runs.at(nextRunIndex).nextRunIndex;
+        til::at(_runs, i).nextRunIndex = i + 1;
     }
 
-    runs.back().nextRunIndex = 0;
-
-    _runs.swap(runs);
+    _runs.back().nextRunIndex = 0;
 }
 
 #pragma endregion

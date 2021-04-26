@@ -202,7 +202,6 @@ public:
     void SetScrollMargins(const Microsoft::Console::Types::Viewport margins);
     bool AreMarginsSet() const noexcept;
     bool IsCursorInMargins(const COORD cursorPosition) const noexcept;
-    Microsoft::Console::Types::Viewport GetScrollingRegion() const noexcept;
 
     [[nodiscard]] NTSTATUS UseAlternateScreenBuffer();
     void UseMainScreenBuffer();
@@ -226,6 +225,7 @@ public:
     void SetTerminalConnection(_In_ Microsoft::Console::ITerminalOutputConnection* const pTtyConnection);
 
     void UpdateBottom();
+    void ResetBottom();
     void MoveToBottom();
 
     Microsoft::Console::Render::IRenderTarget& GetRenderTarget() noexcept;
@@ -237,6 +237,9 @@ public:
     const FontInfoDesired& GetDesiredFont() const noexcept;
 
     void InitializeCursorRowAttributes();
+
+    void SetIgnoreLegacyEquivalentVTAttributes() noexcept;
+    void ResetIgnoreLegacyEquivalentVTAttributes() noexcept;
 
 private:
     SCREEN_INFORMATION(_In_ Microsoft::Console::Interactivity::IWindowMetrics* pMetrics,
@@ -299,6 +302,8 @@ private:
     short _virtualBottom;
 
     ScreenBufferRenderTarget _renderTarget;
+
+    bool _ignoreLegacyEquivalentVTAttributes;
 
 #ifdef UNIT_TESTING
     friend class TextBufferIteratorTests;

@@ -8,7 +8,7 @@
 
 // For _vcprintf
 #include <conio.h>
-#include <stdarg.h>
+#include <cstdarg>
 
 #pragma hdrstop
 
@@ -26,16 +26,13 @@ const COORD VtEngine::INVALID_COORDS = { -1, -1 };
 // Return Value:
 // - An instance of a Renderer.
 VtEngine::VtEngine(_In_ wil::unique_hfile pipe,
-                   const IDefaultColorProvider& colorProvider,
                    const Viewport initialViewport) :
     RenderEngineBase(),
     _hFile(std::move(pipe)),
-    _colorProvider(colorProvider),
-    _LastFG(INVALID_COLOR),
-    _LastBG(INVALID_COLOR),
-    _lastWasBold(false),
+    _lastTextAttributes(INVALID_COLOR, INVALID_COLOR),
     _lastViewport(initialViewport),
-    _invalidMap(initialViewport.Dimensions()),
+    _pool(til::pmr::get_default_resource()),
+    _invalidMap(initialViewport.Dimensions(), false, &_pool),
     _lastText({ 0 }),
     _scrollDelta({ 0, 0 }),
     _quickReturn(false),
@@ -53,7 +50,11 @@ VtEngine::VtEngine(_In_ wil::unique_hfile pipe,
     _newBottomLine{ false },
     _deferredCursorPos{ INVALID_COORDS },
     _inResizeRequest{ false },
-    _trace{}
+    _trace{},
+    _bufferLine{},
+    _buffer{},
+    _formatBuffer{},
+    _conversionBuffer{}
 {
 #ifndef UNIT_TESTING
     // When unit testing, we can instantiate a VtEngine without a pipe.
@@ -147,12 +148,8 @@ VtEngine::VtEngine(_In_ wil::unique_hfile pipe,
 // - S_OK or suitable HRESULT error from either conversion or writing pipe.
 [[nodiscard]] HRESULT VtEngine::_WriteTerminalUtf8(const std::wstring_view wstr) noexcept
 {
-    try
-    {
-        const auto converted = ConvertToA(CP_UTF8, wstr);
-        return _Write(converted);
-    }
-    CATCH_RETURN();
+    RETURN_IF_FAILED(til::u16u8(wstr, _conversionBuffer));
+    return _Write(_conversionBuffer);
 }
 
 // Method Description:

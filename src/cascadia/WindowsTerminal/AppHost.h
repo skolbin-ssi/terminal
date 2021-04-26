@@ -3,9 +3,6 @@
 
 #include "pch.h"
 
-#include <winrt/Microsoft.Terminal.TerminalControl.h>
-#include <winrt/TerminalApp.h>
-
 #include "NonClientIslandWindow.h"
 
 class AppHost
@@ -17,7 +14,10 @@ public:
     void AppTitleChanged(const winrt::Windows::Foundation::IInspectable& sender, winrt::hstring newTitle);
     void LastTabClosed(const winrt::Windows::Foundation::IInspectable& sender, const winrt::TerminalApp::LastTabClosedEventArgs& args);
     void Initialize();
-    bool OnDirectKeyEvent(const uint32_t vkey, const bool down);
+    bool OnDirectKeyEvent(const uint32_t vkey, const uint8_t scanCode, const bool down);
+    void SetTaskbarProgress(const winrt::Windows::Foundation::IInspectable& sender, const winrt::Windows::Foundation::IInspectable& args);
+
+    bool HasWindow();
 
 private:
     bool _useNonClientArea;
@@ -25,15 +25,38 @@ private:
     std::unique_ptr<IslandWindow> _window;
     winrt::TerminalApp::App _app;
     winrt::TerminalApp::AppLogic _logic;
+    bool _shouldCreateWindow{ false };
+    winrt::Microsoft::Terminal::Remoting::WindowManager _windowManager{ nullptr };
 
     void _HandleCommandlineArgs();
 
-    void _HandleCreateWindow(const HWND hwnd, RECT proposedRect, winrt::TerminalApp::LaunchMode& launchMode);
+    void _HandleCreateWindow(const HWND hwnd, RECT proposedRect, winrt::Microsoft::Terminal::Settings::Model::LaunchMode& launchMode);
     void _UpdateTitleBarContent(const winrt::Windows::Foundation::IInspectable& sender,
                                 const winrt::Windows::UI::Xaml::UIElement& arg);
     void _UpdateTheme(const winrt::Windows::Foundation::IInspectable&,
                       const winrt::Windows::UI::Xaml::ElementTheme& arg);
-    void _ToggleFullscreen(const winrt::Windows::Foundation::IInspectable& sender,
-                           const winrt::TerminalApp::ToggleFullscreenEventArgs& arg);
+    void _FocusModeChanged(const winrt::Windows::Foundation::IInspectable& sender,
+                           const winrt::Windows::Foundation::IInspectable& arg);
+    void _FullscreenChanged(const winrt::Windows::Foundation::IInspectable& sender,
+                            const winrt::Windows::Foundation::IInspectable& arg);
+    void _AlwaysOnTopChanged(const winrt::Windows::Foundation::IInspectable& sender,
+                             const winrt::Windows::Foundation::IInspectable& arg);
+    void _RaiseVisualBell(const winrt::Windows::Foundation::IInspectable& sender,
+                          const winrt::Windows::Foundation::IInspectable& arg);
     void _WindowMouseWheeled(const til::point coord, const int32_t delta);
+    winrt::fire_and_forget _WindowActivated();
+
+    void _DispatchCommandline(winrt::Windows::Foundation::IInspectable sender,
+                              winrt::Microsoft::Terminal::Remoting::CommandlineArgs args);
+
+    void _FindTargetWindow(const winrt::Windows::Foundation::IInspectable& sender,
+                           const winrt::Microsoft::Terminal::Remoting::FindTargetWindowArgs& args);
+    winrt::fire_and_forget _IdentifyWindowsRequested(const winrt::Windows::Foundation::IInspectable sender,
+                                                     const winrt::Windows::Foundation::IInspectable args);
+    void _DisplayWindowId(const winrt::Windows::Foundation::IInspectable& sender,
+                          const winrt::Windows::Foundation::IInspectable& args);
+    winrt::fire_and_forget _RenameWindowRequested(const winrt::Windows::Foundation::IInspectable sender,
+                                                  const winrt::TerminalApp::RenameWindowRequestedArgs args);
+
+    GUID _CurrentDesktopGuid();
 };

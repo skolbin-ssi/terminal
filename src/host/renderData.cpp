@@ -7,7 +7,7 @@
 
 #include "dbcs.h"
 #include "handle.h"
-#include "..\interactivity\inc\ServiceLocator.hpp"
+#include "../interactivity/inc/ServiceLocator.hpp"
 
 #pragma hdrstop
 
@@ -276,7 +276,7 @@ const std::vector<Microsoft::Console::Render::RenderOverlay> RenderData::GetOver
 // - <none>
 // Return Value:
 // - true if the cursor should be drawn twice as wide as usual
-bool RenderData::IsCursorDoubleWidth() const noexcept
+bool RenderData::IsCursorDoubleWidth() const
 {
     const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
     return gci.GetActiveOutputBuffer().CursorIsDoubleWidth();
@@ -318,32 +318,51 @@ const bool RenderData::IsGridLineDrawingAllowed() noexcept
 // - Retrieves the title information to be displayed in the frame/edge of the window
 // Return Value:
 // - String with title information
-const std::wstring RenderData::GetConsoleTitle() const noexcept
+const std::wstring_view RenderData::GetConsoleTitle() const noexcept
 {
     const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
     return gci.GetTitleAndPrefix();
 }
 
-// Routine Description:
-// - Converts a text attribute into the foreground RGB value that should be presented, applying
-//   relevant table translation information and preferences.
+// Method Description:
+// - Get the hyperlink URI associated with a hyperlink ID
+// Arguments:
+// - The hyperlink ID
 // Return Value:
-// - ARGB color value
-const COLORREF RenderData::GetForegroundColor(const TextAttribute& attr) const noexcept
+// - The URI
+const std::wstring RenderData::GetHyperlinkUri(uint16_t id) const noexcept
 {
     const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-    return gci.LookupForegroundColor(attr);
+    return gci.GetActiveOutputBuffer().GetTextBuffer().GetHyperlinkUriFromId(id);
+}
+
+// Method Description:
+// - Get the custom ID associated with a hyperlink ID
+// Arguments:
+// - The hyperlink ID
+// Return Value:
+// - The custom ID if there was one, empty string otherwise
+const std::wstring RenderData::GetHyperlinkCustomId(uint16_t id) const noexcept
+{
+    const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    return gci.GetActiveOutputBuffer().GetTextBuffer().GetCustomIdFromId(id);
+}
+
+// For now, we ignore regex patterns in conhost
+const std::vector<size_t> RenderData::GetPatternId(const COORD /*location*/) const noexcept
+{
+    return {};
 }
 
 // Routine Description:
-// - Converts a text attribute into the background RGB value that should be presented, applying
+// - Converts a text attribute into the RGB values that should be presented, applying
 //   relevant table translation information and preferences.
 // Return Value:
-// - ARGB color value
-const COLORREF RenderData::GetBackgroundColor(const TextAttribute& attr) const noexcept
+// - ARGB color values for the foreground and background
+std::pair<COLORREF, COLORREF> RenderData::GetAttributeColors(const TextAttribute& attr) const noexcept
 {
     const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-    return gci.LookupBackgroundColor(attr);
+    return gci.LookupAttributeColors(attr);
 }
 #pragma endregion
 

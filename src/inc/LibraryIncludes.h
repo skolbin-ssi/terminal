@@ -23,6 +23,7 @@
 #include <deque>
 #include <list>
 #include <memory>
+#include <memory_resource>
 #include <map>
 #include <mutex>
 #include <shared_mutex>
@@ -38,7 +39,7 @@
 #include <vector>
 #include <unordered_map>
 #include <iterator>
-#include <math.h>
+#include <cmath>
 #include <sstream>
 #include <fstream>
 #include <iomanip>
@@ -61,10 +62,9 @@
 // GSL
 // Block GSL Multi Span include because it both has C++17 deprecated iterators
 // and uses the C-namespaced "max" which conflicts with Windows definitions.
-#ifndef BLOCK_GSL
 #define GSL_MULTI_SPAN_H
 #include <gsl/gsl>
-#endif
+#include <gsl/span_ext>
 
 // CppCoreCheck
 #include <CppCoreCheck/Warnings.h>
@@ -75,6 +75,9 @@
 #include <base/numerics/safe_math.h>
 #pragma warning(pop)
 
+// Boost
+#include "boost/container/small_vector.hpp"
+
 // IntSafe
 #define ENABLE_INTSAFE_SIGNED_FUNCTIONS
 #include <intsafe.h>
@@ -84,10 +87,17 @@
 
 // Dynamic Bitset (optional dependency on LibPopCnt for perf at bit counting)
 // Variable-size compressed-storage header-only bit flag storage library.
+#pragma warning(push)
+#pragma warning(disable:4702) // unreachable code
 #include <dynamic_bitset.hpp>
+#pragma warning(pop)
 
 // {fmt}, a C++20-compatible formatting library
 #include <fmt/format.h>
+#include <fmt/compile.h>
+
+#define USE_INTERVAL_TREE_NAMESPACE
+#include <IntervalTree.h>
 
 // SAL
 #include <sal.h>

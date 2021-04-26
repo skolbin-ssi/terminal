@@ -6,11 +6,11 @@
 #include "ConIoSrvComm.hpp"
 #include "ConIoSrv.h"
 
-#include "..\..\host\dbcs.h"
-#include "..\..\host\input.h"
-#include "..\..\types\inc\IInputEvent.hpp"
+#include "../../host/dbcs.h"
+#include "../../host/input.h"
+#include "../../types/inc/IInputEvent.hpp"
 
-#include "..\inc\ServiceLocator.hpp"
+#include "../inc/ServiceLocator.hpp"
 
 #pragma hdrstop
 
@@ -100,7 +100,7 @@ ConIoSrvComm::~ConIoSrvComm()
 
     // Initialize the server port name.
     Ret = RtlCreateUnicodeString(&PortName, CIS_ALPC_PORT_NAME);
-    if (Ret == FALSE)
+    if (!Ret)
     {
         return STATUS_NO_MEMORY;
     }

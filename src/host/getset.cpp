@@ -18,7 +18,7 @@
 
 #include "ApiRoutines.h"
 
-#include "..\interactivity\inc\ServiceLocator.hpp"
+#include "../interactivity/inc/ServiceLocator.hpp"
 
 #pragma hdrstop
 
@@ -524,7 +524,24 @@ void ApiRoutines::GetLargestConsoleWindowSizeImpl(const SCREEN_INFORMATION& cont
         COORD const coordScreenBufferSize = screenInfo.GetBufferSize().Dimensions();
         if (size.X != coordScreenBufferSize.X || size.Y != coordScreenBufferSize.Y)
         {
-            RETURN_NTSTATUS(screenInfo.ResizeScreenBuffer(size, TRUE));
+            RETURN_IF_NTSTATUS_FAILED(screenInfo.ResizeScreenBuffer(size, TRUE));
+        }
+
+        // Make sure the viewport doesn't now overflow the buffer dimensions.
+        auto overflow = screenInfo.GetViewport().BottomRightExclusive() - screenInfo.GetBufferSize().Dimensions();
+        if (overflow.X > 0 || overflow.Y > 0)
+        {
+            overflow = { std::max<SHORT>(overflow.X, 0), std::max<SHORT>(overflow.Y, 0) };
+            RETURN_IF_NTSTATUS_FAILED(screenInfo.SetViewportOrigin(false, -overflow, false));
+        }
+
+        // And also that the cursor position is clamped within the buffer boundaries.
+        auto& cursor = screenInfo.GetTextBuffer().GetCursor();
+        auto clampedCursorPosition = cursor.GetPosition();
+        screenInfo.GetBufferSize().Clamp(clampedCursorPosition);
+        if (clampedCursorPosition != cursor.GetPosition())
+        {
+            cursor.SetPosition(clampedCursorPosition);
         }
 
         return S_OK;
@@ -620,6 +637,23 @@ void ApiRoutines::GetLargestConsoleWindowSizeImpl(const SCREEN_INFORMATION& cont
         //  (see https://msdn.microsoft.com/en-us/library/windows/desktop/ms686125(v=vs.85).aspx and DoSrvSetConsoleWindowInfo)
         // Note that it also doesn't set cursor position.
 
+        // However, we do need to make sure the viewport doesn't now overflow the buffer dimensions.
+        auto overflow = context.GetViewport().BottomRightExclusive() - context.GetBufferSize().Dimensions();
+        if (overflow.X > 0 || overflow.Y > 0)
+        {
+            overflow = { std::max<SHORT>(overflow.X, 0), std::max<SHORT>(overflow.Y, 0) };
+            RETURN_IF_NTSTATUS_FAILED(context.SetViewportOrigin(false, -overflow, false));
+        }
+
+        // And also that the cursor position is clamped within the buffer boundaries.
+        auto& cursor = context.GetTextBuffer().GetCursor();
+        auto clampedCursorPosition = cursor.GetPosition();
+        context.GetBufferSize().Clamp(clampedCursorPosition);
+        if (clampedCursorPosition != cursor.GetPosition())
+        {
+            cursor.SetPosition(clampedCursorPosition);
+        }
+
         return S_OK;
     }
     CATCH_RETURN();
@@ -670,13 +704,18 @@ void ApiRoutines::GetLargestConsoleWindowSizeImpl(const SCREEN_INFORMATION& cont
                                                buffer.GetViewport().ToInclusive();
         COORD delta{ 0 };
         {
-            if (currentViewport.Left > position.X)
+            // When evaluating the X offset, we must convert the buffer position to
+            // equivalent screen coordinates, taking line rendition into account.
+            const auto lineRendition = buffer.GetTextBuffer().GetLineRendition(position.Y);
+            const auto screenPosition = BufferToScreenLine({ position.X, position.Y, position.X, position.Y }, lineRendition);
+
+            if (currentViewport.Left > screenPosition.Left)
             {
-                delta.X = position.X - currentViewport.Left;
+                delta.X = screenPosition.Left - currentViewport.Left;
             }
-            else if (currentViewport.Right < position.X)
+            else if (currentViewport.Right < screenPosition.Right)
             {
-                delta.X = position.X - currentViewport.Right;
+                delta.X = screenPosition.Right - currentViewport.Right;
             }
 
             if (currentViewport.Top > position.Y)
@@ -881,7 +920,7 @@ void ApiRoutines::GetLargestConsoleWindowSizeImpl(const SCREEN_INFORMATION& cont
                                                       (target.Y == -currentBufferDimensions.Y);
             const bool noClipProvided = clip == std::nullopt;
             const bool fillIsBlank = (fillCharacter == UNICODE_SPACE) &&
-                                     (fillAttribute == gci.GenerateLegacyAttributes(buffer.GetAttributes()));
+                                     (fillAttribute == buffer.GetAttributes().GetLegacyAttributes());
 
             if (sourceIsWholeBuffer && targetIsNegativeBufferHeight && noClipProvided && fillIsBlank)
             {
@@ -1369,12 +1408,16 @@ void DoSrvPrivateAllowCursorBlinking(SCREEN_INFORMATION& screenInfo, const bool 
     textBuffer.GetCursor().SetIsOn(true);
 
     // Since we are explicitly moving down a row, clear the wrap status on the row we're leaving
-    textBuffer.GetRowByOffset(cursorPosition.Y).GetCharRow().SetWrapForced(false);
+    textBuffer.GetRowByOffset(cursorPosition.Y).SetWrapForced(false);
 
     cursorPosition.Y += 1;
     if (withReturn)
     {
         cursorPosition.X = 0;
+    }
+    else
+    {
+        cursorPosition = textBuffer.ClampPositionWithinLine(cursorPosition);
     }
 
     return AdjustCursorPosition(screenInfo, cursorPosition, FALSE, nullptr);
@@ -1393,7 +1436,8 @@ void DoSrvPrivateAllowCursorBlinking(SCREEN_INFORMATION& screenInfo, const bool 
 
     const SMALL_RECT viewport = screenInfo.GetActiveBuffer().GetViewport().ToInclusive();
     const COORD oldCursorPosition = screenInfo.GetTextBuffer().GetCursor().GetPosition();
-    const COORD newCursorPosition = { oldCursorPosition.X, oldCursorPosition.Y - 1 };
+    COORD newCursorPosition = { oldCursorPosition.X, oldCursorPosition.Y - 1 };
+    newCursorPosition = screenInfo.GetTextBuffer().ClampPositionWithinLine(newCursorPosition);
 
     // If the cursor is at the top of the viewport, we don't want to shift the viewport up.
     // We want it to stay exactly where it is.
@@ -1562,6 +1606,24 @@ void DoSrvSetCursorColor(SCREEN_INFORMATION& screenInfo,
     screenInfo.GetActiveBuffer().GetTextBuffer().GetCursor().SetColor(cursorColor);
 }
 
+void DoSrvAddHyperlink(SCREEN_INFORMATION& screenInfo,
+                       const std::wstring_view uri,
+                       const std::wstring_view params)
+{
+    auto attr = screenInfo.GetAttributes();
+    const auto id = screenInfo.GetTextBuffer().GetHyperlinkId(uri, params);
+    attr.SetHyperlinkId(id);
+    screenInfo.GetTextBuffer().SetCurrentAttributes(attr);
+    screenInfo.GetTextBuffer().AddHyperlinkToMap(uri, id);
+}
+
+void DoSrvEndHyperlink(SCREEN_INFORMATION& screenInfo)
+{
+    auto attr = screenInfo.GetAttributes();
+    attr.SetHyperlinkId(0);
+    screenInfo.GetTextBuffer().SetCurrentAttributes(attr);
+}
+
 // Routine Description:
 // - A private API call for forcing the renderer to repaint the screen. If the
 //      input screen buffer is not the active one, then just do nothing. We only
@@ -1602,39 +1664,27 @@ void DoSrvPrivateRefreshWindow(_In_ const SCREEN_INFORMATION& screenInfo)
         written = 0;
         needed = 0;
 
-        if (title.has_value() && title.value().size() > 0)
+        if (title.has_value() && title->size() > 0)
         {
-            title.value().at(0) = ANSI_NULL;
+            til::at(*title, 0) = ANSI_NULL;
         }
 
         // Get the appropriate title and length depending on the mode.
-        const wchar_t* pwszTitle;
-        size_t cchTitleLength;
-
-        if (isOriginal)
-        {
-            pwszTitle = gci.GetOriginalTitle().c_str();
-            cchTitleLength = gci.GetOriginalTitle().length();
-        }
-        else
-        {
-            pwszTitle = gci.GetTitle().c_str();
-            cchTitleLength = gci.GetTitle().length();
-        }
+        const std::wstring_view storedTitle = isOriginal ? gci.GetOriginalTitle() : gci.GetTitle();
 
         // Always report how much space we would need.
-        needed = cchTitleLength;
+        needed = storedTitle.size();
 
         // If we have a pointer to receive the data, then copy it out.
         if (title.has_value())
         {
-            HRESULT const hr = StringCchCopyNW(title.value().data(), title.value().size(), pwszTitle, cchTitleLength);
+            HRESULT const hr = StringCchCopyNW(title->data(), title->size(), storedTitle.data(), storedTitle.size());
 
             // Insufficient buffer is allowed. If we return a partial string, that's still OK by historical/compat standards.
             // Just say how much we managed to return.
             if (SUCCEEDED(hr) || STRSAFE_E_INSUFFICIENT_BUFFER == hr)
             {
-                written = std::min(gsl::narrow<size_t>(title.value().size()), cchTitleLength);
+                written = std::min(title->size(), storedTitle.size());
             }
         }
         return S_OK;
@@ -1667,7 +1717,7 @@ void DoSrvPrivateRefreshWindow(_In_ const SCREEN_INFORMATION& screenInfo)
 
         if (title.size() > 0)
         {
-            title.at(0) = ANSI_NULL;
+            til::at(title, 0) = ANSI_NULL;
         }
 
         // Figure out how big our temporary Unicode buffer must be to get the title.
@@ -1694,7 +1744,7 @@ void DoSrvPrivateRefreshWindow(_In_ const SCREEN_INFORMATION& screenInfo)
         // The legacy A behavior is a bit strange. If the buffer given doesn't have enough space to hold
         // the string without null termination (e.g. the title is 9 long, 10 with null. The buffer given isn't >= 9).
         // then do not copy anything back and do not report how much space we need.
-        if (gsl::narrow<size_t>(title.size()) >= converted.size())
+        if (title.size() >= converted.size())
         {
             // Say how many characters of buffer we would need to hold the entire result.
             needed = converted.size();
@@ -1707,13 +1757,13 @@ void DoSrvPrivateRefreshWindow(_In_ const SCREEN_INFORMATION& screenInfo)
             if (SUCCEEDED(hr) || STRSAFE_E_INSUFFICIENT_BUFFER == hr)
             {
                 // And return the size copied (either the size of the buffer or the null terminated length of the string we filled it with.)
-                written = std::min(gsl::narrow<size_t>(title.size()), converted.size() + 1);
+                written = std::min(title.size(), converted.size() + 1);
 
                 // Another compatibility fix... If we had exactly the number of bytes needed for an unterminated string,
                 // then replace the terminator left behind by StringCchCopyNA with the final character of the title string.
-                if (gsl::narrow<size_t>(title.size()) == converted.size())
+                if (title.size() == converted.size())
                 {
-                    title.at(title.size() - 1) = converted.data()[converted.size() - 1];
+                    title.back() = converted.back();
                 }
             }
         }
@@ -1722,7 +1772,7 @@ void DoSrvPrivateRefreshWindow(_In_ const SCREEN_INFORMATION& screenInfo)
             // If we didn't copy anything back and there is space, null terminate the given buffer and return.
             if (title.size() > 0)
             {
-                title.at(0) = ANSI_NULL;
+                til::at(title, 0) = ANSI_NULL;
                 written = 1;
             }
         }

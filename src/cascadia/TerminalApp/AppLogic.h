@@ -4,53 +4,93 @@
 #pragma once
 
 #include "AppLogic.g.h"
-
-#include "Tab.h"
-#include "CascadiaSettings.h"
+#include "FindTargetWindowResult.g.h"
 #include "TerminalPage.h"
+#include "Jumplist.h"
 #include "../../cascadia/inc/cppwinrt_utils.h"
+
+#ifdef UNIT_TESTING
+// fwdecl unittest classes
+namespace TerminalAppLocalTests
+{
+    class CommandlineTest;
+};
+#endif
 
 namespace winrt::TerminalApp::implementation
 {
-    struct AppLogic : AppLogicT<AppLogic>
+    struct FindTargetWindowResult : FindTargetWindowResultT<FindTargetWindowResult>
+    {
+        WINRT_PROPERTY(int32_t, WindowId, -1);
+        WINRT_PROPERTY(winrt::hstring, WindowName, L"");
+
+    public:
+        FindTargetWindowResult(const int32_t id, const winrt::hstring& name) :
+            _WindowId{ id }, _WindowName{ name } {};
+
+        FindTargetWindowResult(const int32_t id) :
+            FindTargetWindowResult(id, L""){};
+    };
+
+    struct AppLogic : AppLogicT<AppLogic, IInitializeWithWindow>
     {
     public:
         static AppLogic* Current() noexcept;
+        static const Microsoft::Terminal::Settings::Model::CascadiaSettings CurrentAppSettings();
 
         AppLogic();
         ~AppLogic() = default;
+
+        STDMETHODIMP Initialize(HWND hwnd);
 
         void Create();
         bool IsUwp() const noexcept;
         void RunAsUwp();
         bool IsElevated() const noexcept;
         void LoadSettings();
-        [[nodiscard]] std::shared_ptr<::TerminalApp::CascadiaSettings> GetSettings() const noexcept;
+        [[nodiscard]] Microsoft::Terminal::Settings::Model::CascadiaSettings GetSettings() const noexcept;
 
         int32_t SetStartupCommandline(array_view<const winrt::hstring> actions);
+        int32_t ExecuteCommandline(array_view<const winrt::hstring> actions, const winrt::hstring& cwd);
+        TerminalApp::FindTargetWindowResult FindTargetWindow(array_view<const winrt::hstring> actions);
         winrt::hstring ParseCommandlineMessage();
         bool ShouldExitEarly();
 
-        winrt::hstring ApplicationDisplayName() const;
-        winrt::hstring ApplicationVersion() const;
+        bool FocusMode() const;
+        bool Fullscreen() const;
+        bool AlwaysOnTop() const;
 
-        Windows::Foundation::Point GetLaunchDimensions(uint32_t dpi);
-        winrt::Windows::Foundation::Point GetLaunchInitialPositions(int32_t defaultInitialX, int32_t defaultInitialY);
+        void IdentifyWindow();
+        void RenameFailed();
+        winrt::hstring WindowName();
+        void WindowName(const winrt::hstring& name);
+        uint64_t WindowId();
+        void WindowId(const uint64_t& id);
+
+        Windows::Foundation::Size GetLaunchDimensions(uint32_t dpi);
+        bool CenterOnLaunch();
+        TerminalApp::InitialPosition GetInitialPosition(int64_t defaultInitialX, int64_t defaultInitialY);
         winrt::Windows::UI::Xaml::ElementTheme GetRequestedTheme();
-        LaunchMode GetLaunchMode();
+        Microsoft::Terminal::Settings::Model::LaunchMode GetLaunchMode();
         bool GetShowTabsInTitlebar();
+        bool GetInitialAlwaysOnTop();
         float CalcSnappedDimension(const bool widthOrHeight, const float dimension) const;
 
         Windows::UI::Xaml::UIElement GetRoot() noexcept;
 
         hstring Title();
         void TitlebarClicked();
-        bool OnDirectKeyEvent(const uint32_t vkey, const bool down);
+        bool OnDirectKeyEvent(const uint32_t vkey, const uint8_t scanCode, const bool down);
 
         void WindowCloseButtonClicked();
 
+        size_t GetLastActiveControlTaskbarState();
+        size_t GetLastActiveControlTaskbarProgress();
+
+        winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::UI::Xaml::Controls::ContentDialogResult> ShowDialog(winrt::Windows::UI::Xaml::Controls::ContentDialog dialog);
+
         // -------------------------------- WinRT Events ---------------------------------
-        DECLARE_EVENT_WITH_TYPED_EVENT_HANDLER(RequestedThemeChanged, _requestedThemeChangedHandlers, winrt::Windows::Foundation::IInspectable, winrt::Windows::UI::Xaml::ElementTheme);
+        TYPED_EVENT(RequestedThemeChanged, winrt::Windows::Foundation::IInspectable, winrt::Windows::UI::Xaml::ElementTheme);
 
     private:
         bool _isUwp{ false };
@@ -63,7 +103,7 @@ namespace winrt::TerminalApp::implementation
         // updated in _ApplyTheme. The root currently is _root.
         winrt::com_ptr<TerminalPage> _root{ nullptr };
 
-        std::shared_ptr<::TerminalApp::CascadiaSettings> _settings{ nullptr };
+        Microsoft::Terminal::Settings::Model::CascadiaSettings _settings{ nullptr };
 
         HRESULT _settingsLoadedResult;
         winrt::hstring _settingsLoadExceptionText{};
@@ -77,11 +117,15 @@ namespace winrt::TerminalApp::implementation
         std::atomic<bool> _settingsReloadQueued{ false };
 
         ::TerminalApp::AppCommandlineArgs _appArgs;
+        ::TerminalApp::AppCommandlineArgs _settingsAppArgs;
         int _ParseArgs(winrt::array_view<const hstring>& args);
+        static TerminalApp::FindTargetWindowResult _doFindTargetWindow(winrt::array_view<const hstring> args,
+                                                                       const Microsoft::Terminal::Settings::Model::WindowingMode& windowingBehavior);
 
-        fire_and_forget _ShowDialog(const winrt::Windows::Foundation::IInspectable& sender, winrt::Windows::UI::Xaml::Controls::ContentDialog dialog);
         void _ShowLoadErrorsDialog(const winrt::hstring& titleKey, const winrt::hstring& contentKey, HRESULT settingsLoadedResult);
         void _ShowLoadWarningsDialog();
+        bool _IsKeyboardServiceEnabled();
+        void _ShowKeyboardServiceDisabledDialog();
 
         fire_and_forget _LoadErrorsDialogRoutine();
         fire_and_forget _ShowLoadWarningsDialogRoutine();
@@ -97,13 +141,27 @@ namespace winrt::TerminalApp::implementation
 
         void _ApplyTheme(const Windows::UI::Xaml::ElementTheme& newTheme);
 
+        bool _hasCommandLineArguments{ false };
+        bool _hasSettingsStartupActions{ false };
+        std::vector<Microsoft::Terminal::Settings::Model::SettingsLoadWarnings> _warnings;
+
         // These are events that are handled by the TerminalPage, but are
         // exposed through the AppLogic. This macro is used to forward the event
         // directly to them.
         FORWARDED_TYPED_EVENT(SetTitleBarContent, winrt::Windows::Foundation::IInspectable, winrt::Windows::UI::Xaml::UIElement, _root, SetTitleBarContent);
         FORWARDED_TYPED_EVENT(TitleChanged, winrt::Windows::Foundation::IInspectable, winrt::hstring, _root, TitleChanged);
         FORWARDED_TYPED_EVENT(LastTabClosed, winrt::Windows::Foundation::IInspectable, winrt::TerminalApp::LastTabClosedEventArgs, _root, LastTabClosed);
-        FORWARDED_TYPED_EVENT(ToggleFullscreen, winrt::Windows::Foundation::IInspectable, winrt::TerminalApp::ToggleFullscreenEventArgs, _root, ToggleFullscreen);
+        FORWARDED_TYPED_EVENT(FocusModeChanged, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, FocusModeChanged);
+        FORWARDED_TYPED_EVENT(FullscreenChanged, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, FullscreenChanged);
+        FORWARDED_TYPED_EVENT(AlwaysOnTopChanged, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, AlwaysOnTopChanged);
+        FORWARDED_TYPED_EVENT(RaiseVisualBell, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, RaiseVisualBell);
+        FORWARDED_TYPED_EVENT(SetTaskbarProgress, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, SetTaskbarProgress);
+        FORWARDED_TYPED_EVENT(IdentifyWindowsRequested, Windows::Foundation::IInspectable, Windows::Foundation::IInspectable, _root, IdentifyWindowsRequested);
+        FORWARDED_TYPED_EVENT(RenameWindowRequested, Windows::Foundation::IInspectable, winrt::TerminalApp::RenameWindowRequestedArgs, _root, RenameWindowRequested);
+
+#ifdef UNIT_TESTING
+        friend class TerminalAppLocalTests::CommandlineTest;
+#endif
     };
 }
 

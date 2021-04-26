@@ -18,27 +18,32 @@ namespace Microsoft::Console::Render
                        IDWriteFactory* dwriteFactory,
                        const DWRITE_LINE_SPACING spacing,
                        const D2D_SIZE_F cellSize,
+                       const D2D_SIZE_F targetSize,
                        const std::optional<CursorOptions>& cursorInfo,
-                       const D2D1_DRAW_TEXT_OPTIONS options = D2D1_DRAW_TEXT_OPTIONS_NONE) noexcept
+                       const D2D1_DRAW_TEXT_OPTIONS options = D2D1_DRAW_TEXT_OPTIONS_NONE) noexcept :
+            renderTarget(renderTarget),
+            foregroundBrush(foregroundBrush),
+            backgroundBrush(backgroundBrush),
+            useItalicFont(false),
+            forceGrayscaleAA(forceGrayscaleAA),
+            dwriteFactory(dwriteFactory),
+            spacing(spacing),
+            cellSize(cellSize),
+            targetSize(targetSize),
+            cursorInfo(cursorInfo),
+            options(options)
         {
-            this->renderTarget = renderTarget;
-            this->foregroundBrush = foregroundBrush;
-            this->backgroundBrush = backgroundBrush;
-            this->forceGrayscaleAA = forceGrayscaleAA;
-            this->dwriteFactory = dwriteFactory;
-            this->spacing = spacing;
-            this->cellSize = cellSize;
-            this->cursorInfo = cursorInfo;
-            this->options = options;
         }
 
         ID2D1RenderTarget* renderTarget;
         ID2D1SolidColorBrush* foregroundBrush;
         ID2D1SolidColorBrush* backgroundBrush;
+        bool useItalicFont;
         bool forceGrayscaleAA;
         IDWriteFactory* dwriteFactory;
         DWRITE_LINE_SPACING spacing;
         D2D_SIZE_F cellSize;
+        D2D_SIZE_F targetSize;
         std::optional<CursorOptions> cursorInfo;
         D2D1_DRAW_TEXT_OPTIONS options;
     };
@@ -50,7 +55,8 @@ namespace Microsoft::Console::Render
         Outline
     };
 
-    constexpr const ULONG MinCursorHeightPercent = 25;
+    constexpr const ULONG MinCursorHeightPixels = 1;
+    constexpr const ULONG MinCursorHeightPercent = 1;
     constexpr const ULONG MaxCursorHeightPercent = 100;
 
     class CustomTextRenderer : public ::Microsoft::WRL::RuntimeClass<::Microsoft::WRL::RuntimeClassFlags<::Microsoft::WRL::ClassicCom | ::Microsoft::WRL::InhibitFtmBase>, IDWriteTextRenderer>
@@ -98,6 +104,8 @@ namespace Microsoft::Console::Render
                                                                  BOOL isRightToLeft,
                                                                  IUnknown* clientDrawingEffect) noexcept override;
 
+        [[nodiscard]] HRESULT STDMETHODCALLTYPE EndClip(void* clientDrawingContext) noexcept;
+
     private:
         [[nodiscard]] HRESULT _FillRectangle(void* clientDrawingContext,
                                              IUnknown* clientDrawingEffect,
@@ -128,5 +136,7 @@ namespace Microsoft::Console::Render
                                                 DWRITE_MEASURING_MODE measuringMode,
                                                 _In_ const DWRITE_GLYPH_RUN* glyphRun,
                                                 _In_opt_ const DWRITE_GLYPH_RUN_DESCRIPTION* glyphRunDescription) noexcept;
+
+        std::optional<D2D1_RECT_F> _clipRect;
     };
 }

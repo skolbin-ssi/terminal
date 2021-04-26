@@ -11,6 +11,7 @@
 #include <wrl/implements.h>
 
 #include "BoxDrawingEffect.h"
+#include "DxFontRenderData.h"
 #include "../inc/Cluster.hpp"
 
 namespace Microsoft::Console::Render
@@ -20,13 +21,11 @@ namespace Microsoft::Console::Render
     public:
         // Based on the Windows 7 SDK sample at https://github.com/pauldotknopf/WindowsSDK7-Samples/tree/master/multimedia/DirectWrite/CustomLayout
 
-        CustomTextLayout(gsl::not_null<IDWriteFactory1*> const factory,
-                         gsl::not_null<IDWriteTextAnalyzer1*> const analyzer,
-                         gsl::not_null<IDWriteTextFormat*> const format,
-                         gsl::not_null<IDWriteFontFace1*> const font,
-                         const std::basic_string_view<::Microsoft::Console::Render::Cluster> clusters,
-                         size_t const width,
-                         IBoxDrawingEffect* const boxEffect);
+        CustomTextLayout(gsl::not_null<DxFontRenderData*> const fontRenderData);
+
+        [[nodiscard]] HRESULT STDMETHODCALLTYPE AppendClusters(const gsl::span<const ::Microsoft::Console::Render::Cluster> clusters);
+
+        [[nodiscard]] HRESULT STDMETHODCALLTYPE Reset() noexcept;
 
         [[nodiscard]] HRESULT STDMETHODCALLTYPE GetColumns(_Out_ UINT32* columns);
 
@@ -65,8 +64,6 @@ namespace Microsoft::Console::Render
         [[nodiscard]] HRESULT STDMETHODCALLTYPE SetNumberSubstitution(UINT32 textPosition,
                                                                       UINT32 textLength,
                                                                       _In_ IDWriteNumberSubstitution* numberSubstitution) override;
-
-        [[nodiscard]] static HRESULT STDMETHODCALLTYPE s_CalculateBoxEffect(IDWriteTextFormat* format, size_t widthPixels, IDWriteFontFace1* face, float fontScale, IBoxDrawingEffect** effect) noexcept;
 
     protected:
         // A single contiguous run of characters containing the same analysis results.
@@ -144,23 +141,22 @@ namespace Microsoft::Console::Render
         [[nodiscard]] HRESULT _DrawGlyphRuns(_In_opt_ void* clientDrawingContext,
                                              IDWriteTextRenderer* renderer,
                                              const D2D_POINT_2F origin) noexcept;
+        [[nodiscard]] HRESULT _DrawGlyphRun(_In_opt_ void* clientDrawingContext,
+                                            gsl::not_null<IDWriteTextRenderer*> renderer,
+                                            D2D_POINT_2F& mutableOrigin,
+                                            const Run& run) noexcept;
 
         [[nodiscard]] static constexpr UINT32 _EstimateGlyphCount(const UINT32 textLength) noexcept;
 
     private:
-        const ::Microsoft::WRL::ComPtr<IDWriteFactory1> _factory;
+        // DirectWrite font render data
+        DxFontRenderData* _fontRenderData;
 
-        // DirectWrite analyzer
-        const ::Microsoft::WRL::ComPtr<IDWriteTextAnalyzer1> _analyzer;
+        // DirectWrite text formats
+        IDWriteTextFormat* _formatInUse;
 
-        // DirectWrite text format
-        const ::Microsoft::WRL::ComPtr<IDWriteTextFormat> _format;
-
-        // DirectWrite font face
-        const ::Microsoft::WRL::ComPtr<IDWriteFontFace1> _font;
-
-        // Box drawing effect
-        const ::Microsoft::WRL::ComPtr<IBoxDrawingEffect> _boxDrawingEffect;
+        // DirectWrite font faces
+        IDWriteFontFace1* _fontInUse;
 
         // The text we're analyzing and processing into a layout
         std::wstring _text;

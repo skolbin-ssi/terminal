@@ -10,10 +10,10 @@
 #include <windows.h>
 #include <winmeta.h>
 
-#include "..\host\conddkrefs.h"
+#include "../host/conddkrefs.h"
 #include <condrv.h>
 
-#include <math.h>
+#include <cmath>
 
 #include <algorithm>
 #include <exception>

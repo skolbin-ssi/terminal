@@ -6,18 +6,18 @@
 // System headers
 #include <windows.h>
 
-// Standard library C-style
-#include <wchar.h>
-#include <stdlib.h>
-#include <stdio.h>
+// Standard C++ library
+#include <cwchar>
+#include <cstdlib>
+#include <cstdio>
 
 #include <string>
 using namespace std;
 
 // WIL
 #define WIL_SUPPORT_BITOPERATION_PASCAL_NAMES
-#include <wil\Common.h>
-#include <wil\Result.h>
+#include <wil/Common.h>
+#include <wil/Result.h>
 
 bool gVtInput = false;
 bool gVtOutput = true;

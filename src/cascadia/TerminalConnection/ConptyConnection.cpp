@@ -3,15 +3,13 @@
 
 #include "pch.h"
 
-// We have to define GSL here, not PCH
-// because TelnetConnection has a conflicting GSL implementation.
-#include <gsl/gsl>
-
 #include "ConptyConnection.h"
 
 #include <windows.h>
+#include <userenv.h>
 
 #include "ConptyConnection.g.cpp"
+#include "CTerminalHandoff.h"
 
 #include "../../types/inc/utils.hpp"
 #include "../../types/inc/Environment.hpp"
@@ -87,7 +85,7 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
         std::wstring cmdline{ wil::ExpandEnvironmentStringsW<std::wstring>(_commandline.c_str()) }; // mutable copy -- required for CreateProcessW
 
         Utils::EnvironmentVariableMapW environment;
-        auto zeroEnvMap = wil::scope_exit([&] {
+        auto zeroEnvMap = wil::scope_exit([&]() noexcept {
             // Can't zero the keys, but at least we can zero the values.
             for (auto& [name, value] : environment)
             {
@@ -97,8 +95,11 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
             environment.clear();
         });
 
-        // Populate the environment map with the current environment.
-        RETURN_IF_FAILED(Utils::UpdateEnvironmentMapW(environment));
+        {
+            const auto newEnvironmentBlock{ Utils::CreateEnvironmentBlock() };
+            // Populate the environment map with the current environment.
+            RETURN_IF_FAILED(Utils::UpdateEnvironmentMapW(environment, newEnvironmentBlock.get()));
+        }
 
         {
             // Convert connection Guid to string and ignore the enclosing '{}'.
@@ -190,6 +191,32 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
     }
     CATCH_RETURN();
 
+    ConptyConnection::ConptyConnection(const HANDLE hSig,
+                                       const HANDLE hIn,
+                                       const HANDLE hOut,
+                                       const HANDLE hClientProcess) :
+        _initialRows{ 25 },
+        _initialCols{ 80 },
+        _commandline{ L"" },
+        _startingDirectory{ L"" },
+        _startingTitle{ L"" },
+        _environment{ nullptr },
+        _guid{},
+        _u8State{},
+        _u16Str{},
+        _buffer{},
+        _inPipe{ hIn },
+        _outPipe{ hOut }
+    {
+        hSig; // TODO: GH 9464 this needs to be packed into the hpcon
+        if (_guid == guid{})
+        {
+            _guid = Utils::CreateGuid();
+        }
+
+        _piClient.hProcess = hClientProcess;
+    }
+
     ConptyConnection::ConptyConnection(const hstring& commandline,
                                        const hstring& startingDirectory,
                                        const hstring& startingTitle,
@@ -222,9 +249,12 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
     void ConptyConnection::Start()
     try
     {
-        const COORD dimensions{ gsl::narrow_cast<SHORT>(_initialCols), gsl::narrow_cast<SHORT>(_initialRows) };
-        THROW_IF_FAILED(_CreatePseudoConsoleAndPipes(dimensions, PSEUDOCONSOLE_RESIZE_QUIRK | PSEUDOCONSOLE_WIN32_INPUT_MODE, &_inPipe, &_outPipe, &_hPC));
-        THROW_IF_FAILED(_LaunchAttachedClient());
+        if (!_inPipe)
+        {
+            const COORD dimensions{ gsl::narrow_cast<SHORT>(_initialCols), gsl::narrow_cast<SHORT>(_initialRows) };
+            THROW_IF_FAILED(_CreatePseudoConsoleAndPipes(dimensions, PSEUDOCONSOLE_RESIZE_QUIRK | PSEUDOCONSOLE_WIN32_INPUT_MODE, &_inPipe, &_outPipe, &_hPC));
+            THROW_IF_FAILED(_LaunchAttachedClient());
+        }
 
         _startTime = std::chrono::high_resolution_clock::now();
 
@@ -247,6 +277,8 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
             nullptr));
 
         THROW_LAST_ERROR_IF_NULL(_hOutputThread);
+
+        LOG_IF_FAILED(SetThreadDescription(_hOutputThread.get(), L"ConptyConnection Output Thread"));
 
         _clientExitWait.reset(CreateThreadpoolWait(
             [](PTP_CALLBACK_INSTANCE /*callbackInstance*/, PVOID context, PTP_WAIT /*wait*/, TP_WAIT_RESULT /*waitResult*/) noexcept {
@@ -449,6 +481,50 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
         }
 
         return 0;
+    }
+
+    static winrt::event<NewConnectionHandler> _newConnectionHandlers;
+
+    winrt::event_token ConptyConnection::NewConnection(NewConnectionHandler const& handler) { return _newConnectionHandlers.add(handler); };
+    void ConptyConnection::NewConnection(winrt::event_token const& token) { _newConnectionHandlers.remove(token); };
+
+    HRESULT ConptyConnection::NewHandoff(HANDLE in, HANDLE out, HANDLE signal, HANDLE process) noexcept
+    try
+    {
+        auto conn = winrt::make<implementation::ConptyConnection>(signal, in, out, process);
+        _newConnectionHandlers(conn);
+
+        return S_OK;
+    }
+    CATCH_RETURN()
+
+    void ConptyConnection::StartInboundListener()
+    {
+        THROW_IF_FAILED(CTerminalHandoff::s_StartListening(&ConptyConnection::NewHandoff));
+    }
+
+    void ConptyConnection::StopInboundListener()
+    {
+        THROW_IF_FAILED(CTerminalHandoff::s_StopListening());
+    }
+
+    // Function Description:
+    // - This function will be called (by C++/WinRT) after the final outstanding reference to
+    //   any given connection instance is released.
+    //   When a client application exits, its termination will wait for the output thread to
+    //   run down. However, because our teardown is somewhat complex, our last reference may
+    //   be owned by the very output thread that the client wait threadpool is blocked on.
+    //   During destruction, we'll try to release any outstanding handles--including the one
+    //   we have to the threadpool wait. As you might imagine, this takes us right to deadlock
+    //   city.
+    //   Deferring the final destruction of the connection to a background thread that can't
+    //   be awaiting our destruction breaks the deadlock.
+    // Arguments:
+    // - connection: the final living reference to an outgoing connection
+    winrt::fire_and_forget ConptyConnection::final_release(std::unique_ptr<ConptyConnection> connection)
+    {
+        co_await winrt::resume_background(); // move to background
+        connection.reset(); // explicitly destruct
     }
 
 }

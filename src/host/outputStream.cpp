@@ -125,36 +125,9 @@ bool ConhostInternalGetSet::SetConsoleScreenBufferInfoEx(const CONSOLE_SCREEN_BU
 // - true if successful (see DoSrvSetConsoleCursorPosition). false otherwise.
 bool ConhostInternalGetSet::SetConsoleCursorPosition(const COORD position)
 {
-    return SUCCEEDED(ServiceLocator::LocateGlobals().api.SetConsoleCursorPositionImpl(_io.GetActiveOutputBuffer(), position));
-}
-
-// Routine Description:
-// - Connects the GetConsoleCursorInfo API call directly into our Driver Message servicing call inside Conhost.exe
-// Arguments:
-// - cursorInfo - Structure to receive console cursor rendering info
-// Return Value:
-// - true if successful (see DoSrvGetConsoleCursorInfo). false otherwise.
-bool ConhostInternalGetSet::GetConsoleCursorInfo(CONSOLE_CURSOR_INFO& cursorInfo) const
-{
-    bool visible;
-    DWORD size;
-
-    ServiceLocator::LocateGlobals().api.GetConsoleCursorInfoImpl(_io.GetActiveOutputBuffer(), size, visible);
-    cursorInfo.bVisible = visible;
-    cursorInfo.dwSize = size;
-    return true;
-}
-
-// Routine Description:
-// - Connects the SetConsoleCursorInfo API call directly into our Driver Message servicing call inside Conhost.exe
-// Arguments:
-// - cursorInfo - Updated size/visibility information to modify the cursor rendering behavior.
-// Return Value:
-// - true if successful (see DoSrvSetConsoleCursorInfo). false otherwise.
-bool ConhostInternalGetSet::SetConsoleCursorInfo(const CONSOLE_CURSOR_INFO& cursorInfo)
-{
-    const bool visible = !!cursorInfo.bVisible;
-    return SUCCEEDED(ServiceLocator::LocateGlobals().api.SetConsoleCursorInfoImpl(_io.GetActiveOutputBuffer(), cursorInfo.dwSize, visible));
+    auto& info = _io.GetActiveOutputBuffer();
+    const auto clampedPosition = info.GetTextBuffer().ClampPositionWithinLine(position);
+    return SUCCEEDED(ServiceLocator::LocateGlobals().api.SetConsoleCursorPositionImpl(info, clampedPosition));
 }
 
 // Method Description:
@@ -180,6 +153,48 @@ bool ConhostInternalGetSet::PrivateSetTextAttributes(const TextAttribute& attrs)
 {
     _io.GetActiveOutputBuffer().SetAttributes(attrs);
     return true;
+}
+
+// Method Description:
+// - Sets the line rendition attribute for the current row of the active screen
+//   buffer. This controls how character cells are scaled when the row is rendered.
+// Arguments:
+// - lineRendition: The new LineRendition attribute to use
+// Return Value:
+// - true if successful. false otherwise.
+bool ConhostInternalGetSet::PrivateSetCurrentLineRendition(const LineRendition lineRendition)
+{
+    auto& textBuffer = _io.GetActiveOutputBuffer().GetTextBuffer();
+    textBuffer.SetCurrentLineRendition(lineRendition);
+    return true;
+}
+
+// Method Description:
+// - Resets the line rendition attribute to SingleWidth for a specified range
+//   of row numbers.
+// Arguments:
+// - startRow: The row number of first line to be modified
+// - endRow: The row number following the last line to be modified
+// Return Value:
+// - true if successful. false otherwise.
+bool ConhostInternalGetSet::PrivateResetLineRenditionRange(const size_t startRow, const size_t endRow)
+{
+    auto& textBuffer = _io.GetActiveOutputBuffer().GetTextBuffer();
+    textBuffer.ResetLineRenditionRange(startRow, endRow);
+    return true;
+}
+
+// Method Description:
+// - Returns the number of cells that will fit on the specified row when
+//   rendered with its current line rendition.
+// Arguments:
+// - row: The row number of the line to measure
+// Return Value:
+// - the number of cells that will fit on the line
+SHORT ConhostInternalGetSet::PrivateGetLineWidth(const size_t row) const
+{
+    const auto& textBuffer = _io.GetActiveOutputBuffer().GetTextBuffer();
+    return textBuffer.GetLineWidth(row);
 }
 
 // Routine Description:
@@ -513,6 +528,19 @@ bool ConhostInternalGetSet::PrivateEraseAll()
     return SUCCEEDED(DoSrvPrivateEraseAll(_io.GetActiveOutputBuffer()));
 }
 
+// Method Description:
+// - Retrieves the current user default cursor style.
+// Arguments:
+// - style - Structure to receive cursor style.
+// Return Value:
+// - true if successful. false otherwise.
+bool ConhostInternalGetSet::GetUserDefaultCursorStyle(CursorType& style)
+{
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    style = gci.GetCursorType();
+    return true;
+}
+
 // Routine Description:
 // - Connects the SetCursorStyle call directly into our Driver Message servicing call inside Conhost.exe
 //   SetCursorStyle is an internal-only "API" call that the vt commands can execute,
@@ -525,22 +553,6 @@ bool ConhostInternalGetSet::SetCursorStyle(const CursorType style)
 {
     DoSrvSetCursorStyle(_io.GetActiveOutputBuffer(), style);
     return true;
-}
-
-// Routine Description:
-// - Connects the PrivatePrependConsoleInput API call directly into our Driver Message servicing call inside Conhost.exe
-// Arguments:
-// - events - the input events to be copied into the head of the input
-//            buffer for the underlying attached process
-// - eventsWritten - on output, the number of events written
-// Return Value:
-// - true if successful (see DoSrvPrivatePrependConsoleInput). false otherwise.
-bool ConhostInternalGetSet::PrivatePrependConsoleInput(std::deque<std::unique_ptr<IInputEvent>>& events,
-                                                       size_t& eventsWritten)
-{
-    return SUCCEEDED(DoSrvPrivatePrependConsoleInput(_io.GetActiveInputBuffer(),
-                                                     events,
-                                                     eventsWritten));
 }
 
 // Routine Description:
@@ -642,6 +654,17 @@ bool ConhostInternalGetSet::InsertLines(const size_t count)
 {
     DoSrvPrivateInsertLines(count);
     return true;
+}
+
+// Method Description:
+// - Resets the internal "virtual bottom" tracker to the top of the buffer.
+// Arguments:
+// - <none>
+// Return Value:
+// - <none>
+void ConhostInternalGetSet::ResetBottom()
+{
+    _io.GetActiveOutputBuffer().ResetBottom();
 }
 
 // Method Description:
@@ -769,4 +792,23 @@ bool ConhostInternalGetSet::PrivateScrollRegion(const SMALL_RECT scrollRect,
 bool ConhostInternalGetSet::PrivateIsVtInputEnabled() const
 {
     return _io.GetActiveInputBuffer()->IsInVirtualTerminalInputMode();
+}
+
+// Method Description:
+// - Updates the buffer's current text attributes depending on whether we are
+//   starting/ending a hyperlink
+// Arguments:
+// - The hyperlink URI
+// Return Value:
+// - true
+bool ConhostInternalGetSet::PrivateAddHyperlink(const std::wstring_view uri, const std::wstring_view params) const
+{
+    DoSrvAddHyperlink(_io.GetActiveOutputBuffer(), uri, params);
+    return true;
+}
+
+bool ConhostInternalGetSet::PrivateEndHyperlink() const
+{
+    DoSrvEndHyperlink(_io.GetActiveOutputBuffer());
+    return true;
 }

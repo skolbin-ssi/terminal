@@ -14,7 +14,7 @@ Abstract:
 #include <windows.h>
 #include <winmeta.h>
 #include <TraceLoggingProvider.h>
-#include "limits.h"
+#include "climits"
 
 TRACELOGGING_DECLARE_PROVIDER(g_hConsoleVirtTermParserEventTraceProvider);
 
@@ -52,6 +52,9 @@ namespace Microsoft::Console::VirtualTerminal
             DECKPNM,
             DSR,
             DA,
+            DA2,
+            DA3,
+            DECREQTPARM,
             VPA,
             HPR,
             VPR,
@@ -96,7 +99,13 @@ namespace Microsoft::Console::VirtualTerminal
             REP,
             OSCFG,
             OSCBG,
+            DECSWL,
+            DECDWL,
+            DECDHL,
             DECALN,
+            OSCSCB,
+            XTPUSHSGR,
+            XTPOPSGR,
             // Only use this last enum as a count of the number of codes.
             NUMBER_OF_CODES
         };

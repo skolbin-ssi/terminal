@@ -9,7 +9,7 @@
 #include "TermControlAutomationPeer.g.cpp"
 
 #include "XamlUiaTextRange.h"
-#include "..\types\UiaTracing.h"
+#include "../types/UiaTracing.h"
 
 using namespace Microsoft::Console::Types;
 using namespace winrt::Windows::UI::Xaml::Automation::Peers;
@@ -28,9 +28,9 @@ namespace XamlAutomation
     using winrt::Windows::UI::Xaml::Automation::Provider::ITextRangeProvider;
 }
 
-namespace winrt::Microsoft::Terminal::TerminalControl::implementation
+namespace winrt::Microsoft::Terminal::Control::implementation
 {
-    TermControlAutomationPeer::TermControlAutomationPeer(winrt::Microsoft::Terminal::TerminalControl::implementation::TermControl* owner) :
+    TermControlAutomationPeer::TermControlAutomationPeer(winrt::Microsoft::Terminal::Control::implementation::TermControl* owner) :
         TermControlAutomationPeerT<TermControlAutomationPeer>(*owner), // pass owner to FrameworkElementAutomationPeer
         _termControl{ owner }
     {
